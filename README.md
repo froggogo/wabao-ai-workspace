@@ -1,8 +1,17 @@
 # 蛙宝 AI 工作台（WaBao AI Workspace）
 
-> 文、图、声一体的多模态 AI 工作台 —— 基于 OpenAI Platform API 构建
+> 文、图、声一体的多模态 AI 工作台 · P1 文本阶段全栈实现（React + NestJS + PostgreSQL，SSE 流式对话、模板创作、内容审核、JWT 鉴权）
 
-本仓库汇总了「蛙宝 AI 工作台」项目的**全部内容**：产品/设计/架构文档 + 可运行的前端原型代码。
+<p>
+  <img alt="stack" src="https://img.shields.io/badge/frontend-React%2019%20%2B%20Vite-61dafb">
+  <img alt="stack" src="https://img.shields.io/badge/backend-NestJS%20%2B%20Prisma-e0234e">
+  <img alt="db" src="https://img.shields.io/badge/db-PostgreSQL%2016-336791">
+  <img alt="ai" src="https://img.shields.io/badge/AI-OpenAI%20%7C%20mock-412991">
+</p>
+
+**仓库名**：`wabao-ai-workspace` · **Topics**：`ai` `llm` `openai` `nestjs` `react` `typescript` `prisma` `postgresql` `sse` `fullstack` `multimodal`
+
+本仓库汇总了「蛙宝 AI 工作台」项目的**全部内容**：产品/设计/架构文档 + 可运行的前端原型 + NestJS 后端 + 一键启动脚本。
 
 ## 目录结构
 
