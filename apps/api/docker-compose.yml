@@ -1,0 +1,23 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: wabao-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: wabao
+      POSTGRES_PASSWORD: wabao
+      POSTGRES_DB: wabao
+    ports:
+      - "5432:5432"
+    volumes:
+      - wabao_pg:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    container_name: wabao-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+
+volumes:
+  wabao_pg:

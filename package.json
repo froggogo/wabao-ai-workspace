@@ -1,0 +1,22 @@
+{
+  "name": "wabao-ai",
+  "version": "0.1.0",
+  "private": true,
+  "description": "蛙宝 AI 工作台 —— 文、图、声一体的多模态 AI 工作台（P1 文本阶段）",
+  "scripts": {
+    "setup": "node scripts/setup.mjs",
+    "db:up": "cd apps/api && docker compose up -d",
+    "db:down": "cd apps/api && docker compose down",
+    "db:init": "pnpm --dir apps/api prisma:push && pnpm --dir apps/api seed",
+    "db:studio": "pnpm --dir apps/api exec prisma studio",
+    "dev:api": "pnpm --dir apps/api start:dev",
+    "dev:web": "pnpm --dir wabao-prototype dev",
+    "test": "pnpm --dir apps/api test",
+    "test:e2e": "pnpm --dir apps/api test:e2e",
+    "build": "pnpm --dir apps/api build && pnpm --dir wabao-prototype build"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@10.19.0"
+}

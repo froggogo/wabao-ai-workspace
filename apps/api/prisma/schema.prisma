@@ -1,0 +1,216 @@
+// 蛙宝 AI 工作台 · P1 数据模型
+// 对应《P1 文本阶段 · 原型与接口设计》第六节数据模型
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Plan {
+  free
+  pro
+  team
+}
+
+enum MessageRole {
+  user
+  assistant
+}
+
+enum FeedbackRating {
+  up
+  down
+}
+
+enum UsageFeature {
+  chat
+  studio
+}
+
+enum ModerationRefType {
+  input
+  output
+}
+
+enum ModerationAction {
+  block
+  warn
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  name         String
+  avatar       String?
+  plan         Plan     @default(free)
+  quotaTokens  Int      @default(100000) @map("quota_tokens")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  assistants    Assistant[]
+  conversations Conversation[]
+  creations     Creation[]
+  usageRecords  UsageRecord[]
+  refreshTokens RefreshToken[]
+
+  @@map("users")
+}
+
+// 存储 refresh_token 哈希，支持登出/失效
+model RefreshToken {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  tokenHash String   @unique @map("token_hash")
+  expiresAt DateTime @map("expires_at")
+  revoked   Boolean  @default(false)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+model Assistant {
+  id           String   @id @default(cuid())
+  userId       String   @map("user_id")
+  name         String
+  avatar       String   @default("🤖")
+  systemPrompt String   @map("system_prompt")
+  defaultModel String   @default("gpt-5.6-terra") @map("default_model")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  conversations Conversation[]
+
+  @@index([userId])
+  @@map("assistants")
+}
+
+model Conversation {
+  id          String   @id @default(cuid())
+  userId      String   @map("user_id")
+  title       String   @default("新会话")
+  model       String   @default("gpt-5.6-terra")
+  assistantId String?  @map("assistant_id")
+  pinned      Boolean  @default(false)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  assistant Assistant? @relation(fields: [assistantId], references: [id], onDelete: SetNull)
+  messages  Message[]
+
+  @@index([userId])
+  @@map("conversations")
+}
+
+model Message {
+  id             String      @id @default(cuid())
+  conversationId String      @map("conversation_id")
+  role           MessageRole
+  content        String
+  model          String?
+  inputTokens    Int         @default(0) @map("input_tokens")
+  outputTokens   Int         @default(0) @map("output_tokens")
+  cost           Float       @default(0)
+  finishReason   String?     @map("finish_reason")
+  flagged        Boolean     @default(false)
+  parentId       String?     @map("parent_id") // 重生成链
+  createdAt      DateTime    @default(now()) @map("created_at")
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  feedbacks    Feedback[]
+
+  @@index([conversationId])
+  @@map("messages")
+}
+
+model Feedback {
+  id        String         @id @default(cuid())
+  messageId String         @map("message_id")
+  rating    FeedbackRating
+  comment   String?
+  createdAt DateTime       @default(now()) @map("created_at")
+
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@index([messageId])
+  @@map("feedbacks")
+}
+
+// 模板为平台级配置（P1 由 seed 注入，运营后台可扩展）
+model Template {
+  id           String   @id
+  name         String
+  category     String
+  icon         String   @default("📄")
+  description  String   @default("")
+  prompt       String   @default("")
+  inputSchema  Json     @map("input_schema")
+  outputSchema Json?    @map("output_schema")
+  enabled      Boolean  @default(true)
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  creations Creation[]
+
+  @@map("templates")
+}
+
+model Creation {
+  id           String   @id @default(cuid())
+  userId       String   @map("user_id")
+  templateId   String   @map("template_id")
+  templateName String   @map("template_name")
+  inputs       Json
+  output       String
+  outputJson   Json?    @map("output_json")
+  inputTokens  Int      @default(0) @map("input_tokens")
+  outputTokens Int      @default(0) @map("output_tokens")
+  cost         Float    @default(0)
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  template Template @relation(fields: [templateId], references: [id])
+
+  @@index([userId])
+  @@map("creations")
+}
+
+model UsageRecord {
+  id           String       @id @default(cuid())
+  userId       String       @map("user_id")
+  feature      UsageFeature
+  model        String
+  inputTokens  Int          @default(0) @map("input_tokens")
+  outputTokens Int          @default(0) @map("output_tokens")
+  cost         Float        @default(0)
+  cached       Boolean      @default(false)
+  createdAt    DateTime     @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([createdAt])
+  @@map("usage_records")
+}
+
+model ModerationRecord {
+  id         String            @id @default(cuid())
+  userId     String?           @map("user_id")
+  refType    ModerationRefType @map("ref_type")
+  refId      String?           @map("ref_id")
+  flagged    Boolean
+  categories Json
+  action     ModerationAction
+  createdAt  DateTime          @default(now()) @map("created_at")
+
+  @@index([userId])
+  @@map("moderation_records")
+}
