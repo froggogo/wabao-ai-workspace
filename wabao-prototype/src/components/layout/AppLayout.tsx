@@ -10,7 +10,7 @@ const NAV = [
 
 export function AppLayout() {
   const navigate = useNavigate();
-  const { userName, userEmail, logout } = useApp();
+  const { userName, userEmail, userAvatar, logout } = useApp();
 
   return (
     <div className="flex h-full w-full bg-slate-50">
@@ -41,7 +41,7 @@ export function AppLayout() {
             className="flex h-10 w-10 items-center justify-center rounded-full bg-white/15 text-sm font-medium hover:bg-white/25"
             title={userEmail}
           >
-            {userName.slice(0, 1).toUpperCase()}
+            {userAvatar || userName.slice(0, 1).toUpperCase()}
           </button>
           <div className="absolute bottom-0 left-14 z-20 hidden w-44 rounded-xl border border-slate-200 bg-white p-2 text-slate-700 shadow-xl group-hover:block">
             <div className="px-2 py-1.5 text-xs text-slate-400">{userEmail}</div>

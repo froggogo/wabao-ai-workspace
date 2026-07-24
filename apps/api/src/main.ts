@@ -16,7 +16,11 @@ async function bootstrap(): Promise<void> {
   const origins = (config.get<string>('CORS_ORIGIN') ?? 'http://localhost:5173')
     .split(',')
     .map((s) => s.trim());
-  app.enableCors({ origin: origins, credentials: true });
+  app.enableCors({
+    origin: origins,
+    credentials: true,
+    exposedHeaders: ['X-Quota-Remaining'],
+  });
 
   app.useGlobalPipes(
     new ValidationPipe({

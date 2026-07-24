@@ -1,9 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate, useParams } from "react-router-dom";
 import { useApp, genId } from "../store/appStore";
 import { MODELS } from "../lib/mockData";
 import { api } from "../lib/api";
 import { Markdown } from "../components/Markdown";
-import type { Conversation } from "../lib/types";
+import type { Conversation, ReasoningEffort } from "../lib/types";
+
+const REASONING_OPTIONS: { id: ReasoningEffort; label: string }[] = [
+  { id: "low", label: "快速" },
+  { id: "medium", label: "均衡" },
+  { id: "high", label: "深度" },
+];
 
 export function Chat() {
   const {
@@ -17,12 +24,16 @@ export function Chat() {
     togglePin,
     setConversationModel,
     setConversationAssistant,
+    setConversationTemperature,
+    setConversationReasoning,
     addMessage,
     updateMessage,
     replaceMessageId,
     rateMessage,
   } = useApp();
 
+  const { conversationId } = useParams();
+  const navigate = useNavigate();
   const [query, setQuery] = useState("");
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
@@ -34,6 +45,28 @@ export function Chat() {
   const active = conversations.find((c) => c.id === activeConversationId) ?? null;
 
   const grouped = useMemo(() => groupConversations(conversations, query), [conversations, query]);
+
+  // URL ↔ 当前会话 同步（支持深链 /app/chat/:conversationId）
+  useEffect(() => {
+    if (conversationId) {
+      if (conversationId !== activeConversationId) void openConversation(conversationId);
+    } else if (activeConversationId) {
+      navigate(`/app/chat/${activeConversationId}`, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conversationId, activeConversationId]);
+
+  const openConv = (id: string) => navigate(`/app/chat/${id}`);
+
+  const newConversation = async () => {
+    const id = await createConversation();
+    navigate(`/app/chat/${id}`);
+  };
+
+  const removeConversation = async (id: string) => {
+    await deleteConversation(id);
+    navigate("/app/chat", { replace: true });
+  };
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
@@ -140,7 +173,7 @@ export function Chat() {
       <div className="flex w-72 shrink-0 flex-col border-r border-slate-200 bg-white">
         <div className="p-3">
           <button
-            onClick={() => createConversation()}
+            onClick={() => newConversation()}
             className="flex w-full items-center justify-center gap-2 rounded-xl bg-brand-600 py-2.5 text-sm font-medium text-white shadow-md shadow-brand-600/25 transition hover:bg-brand-700"
           >
             <span className="text-lg leading-none">＋</span> 新建会话
@@ -165,8 +198,8 @@ export function Chat() {
                   key={c.id}
                   conv={c}
                   active={c.id === activeConversationId}
-                  onOpen={() => openConversation(c.id)}
-                  onDelete={() => deleteConversation(c.id)}
+                  onOpen={() => openConv(c.id)}
+                  onDelete={() => removeConversation(c.id)}
                   onPin={() => togglePin(c.id)}
                   onRename={(t) => renameConversation(c.id, t)}
                 />
@@ -332,6 +365,45 @@ export function Chat() {
             <p className="mt-2 rounded-lg bg-slate-50 p-2 text-[11px] leading-relaxed text-slate-400">
               {assistants.find((a) => a.id === active.assistantId)?.systemPrompt}
             </p>
+          </div>
+
+          <div>
+            <div className="mb-2 flex items-center justify-between text-xs font-medium text-slate-400">
+              <span>温度（创造性）</span>
+              <span className="text-slate-500">{active.temperature.toFixed(1)}</span>
+            </div>
+            <input
+              type="range"
+              min={0}
+              max={2}
+              step={0.1}
+              value={active.temperature}
+              onChange={(e) => setConversationTemperature(active.id, Number(e.target.value))}
+              className="w-full accent-brand-600"
+            />
+            <div className="mt-1 flex justify-between text-[10px] text-slate-300">
+              <span>严谨</span>
+              <span>发散</span>
+            </div>
+          </div>
+
+          <div>
+            <div className="mb-2 text-xs font-medium text-slate-400">推理强度（高级）</div>
+            <div className="grid grid-cols-3 gap-1.5">
+              {REASONING_OPTIONS.map((r) => (
+                <button
+                  key={r.id}
+                  onClick={() => setConversationReasoning(active.id, r.id)}
+                  className={`rounded-lg border py-1.5 text-xs transition ${
+                    active.reasoningEffort === r.id
+                      ? "border-brand-400 bg-brand-50 text-brand-700"
+                      : "border-slate-200 text-slate-500 hover:border-slate-300"
+                  }`}
+                >
+                  {r.label}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
       )}

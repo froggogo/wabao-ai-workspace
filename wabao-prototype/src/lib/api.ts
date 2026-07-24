@@ -4,6 +4,8 @@ import type {
   Conversation,
   Creation,
   ModelId,
+  ModerationRecord,
+  ReasoningEffort,
   Template,
   UsageBreakdown,
 } from "./types";
@@ -230,6 +232,8 @@ interface RawConversation {
   model: ModelId;
   assistant_id: string | null;
   pinned: boolean;
+  temperature?: number;
+  reasoning_effort?: ReasoningEffort;
   created_at: string;
   updated_at: string;
   messages?: RawMessage[];
@@ -242,6 +246,8 @@ function mapConversation(c: RawConversation): Conversation {
     model: c.model,
     assistantId: c.assistant_id ?? "",
     pinned: c.pinned,
+    temperature: c.temperature ?? 0.7,
+    reasoningEffort: c.reasoning_effort ?? "medium",
     messages: (c.messages ?? []).map(mapMessage),
     createdAt: Date.parse(c.created_at),
     updatedAt: Date.parse(c.updated_at),
@@ -343,19 +349,60 @@ export const api = {
       }
       tokens.clear();
     },
+    changePassword: (oldPassword: string, newPassword: string) =>
+      request<{ success: boolean }>("/auth/change-password", {
+        method: "POST",
+        body: { old_password: oldPassword, new_password: newPassword },
+      }),
   },
 
   users: {
     me: () =>
-      request<{ id: string; email: string; name: string; plan: string }>("/users/me"),
+      request<{ id: string; email: string; name: string; avatar: string | null; plan: string }>(
+        "/users/me",
+      ),
+    update: (input: { name?: string; avatar?: string }) =>
+      request<{ id: string; email: string; name: string; avatar: string | null }>("/users/me", {
+        method: "PATCH",
+        body: input,
+      }),
     usage: (period?: string) =>
       request<{
         period: string;
         plan: string;
         quota_tokens: number;
         used_tokens: number;
+        remaining_tokens: number;
         breakdown: UsageBreakdown[];
       }>(`/usage${period ? `?period=${period}` : ""}`),
+  },
+
+  moderation: {
+    async records(params?: { page?: number; flagged?: boolean }): Promise<ModerationRecord[]> {
+      const q = new URLSearchParams();
+      if (params?.page) q.set("page", String(params.page));
+      if (params?.flagged !== undefined) q.set("flagged", String(params.flagged));
+      const qs = q.toString();
+      // 后端返回 { data: [...], pagination }，request 已解包出 data 数组
+      const rows = await request<
+        {
+          id: string;
+          ref_type: "input" | "output";
+          flagged: boolean;
+          categories: string[];
+          action: "block" | "warn";
+          created_at: string;
+        }[]
+      >(`/admin/moderation-records${qs ? `?${qs}` : ""}`);
+      return rows.map((r) => ({
+        id: r.id,
+        refType: r.ref_type,
+        flagged: r.flagged,
+        categories: Array.isArray(r.categories) ? r.categories : [],
+        action: r.action,
+        createdAt: Date.parse(r.created_at),
+      }));
+    },
   },
 
   assistants: {
@@ -395,7 +442,14 @@ export const api = {
     },
     async update(
       id: string,
-      input: Partial<{ title: string; pinned: boolean; model: ModelId; assistant_id: string }>,
+      input: Partial<{
+        title: string;
+        pinned: boolean;
+        model: ModelId;
+        assistant_id: string;
+        temperature: number;
+        reasoning_effort: ReasoningEffort;
+      }>,
     ): Promise<Conversation> {
       return mapConversation(
         await request<RawConversation>(`/conversations/${id}`, { method: "PATCH", body: input }),

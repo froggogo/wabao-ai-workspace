@@ -7,6 +7,7 @@ export function Login() {
   const [mode, setMode] = useState<"login" | "register">("login");
   const [email, setEmail] = useState("demo@wabao.ai");
   const [password, setPassword] = useState("demo1234");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [name, setName] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -19,6 +20,8 @@ export function Login() {
     setError("");
     if (!/^[^@]+@[^@]+\.[^@]+$/.test(email)) return setError("请输入有效的邮箱");
     if (password.length < 8) return setError("密码至少 8 位");
+    if (mode === "register" && password !== confirmPassword)
+      return setError("两次输入的密码不一致");
     setLoading(true);
     try {
       if (mode === "login") {
@@ -90,6 +93,17 @@ export function Login() {
                 placeholder="至少 8 位"
               />
             </Field>
+            {mode === "register" && (
+              <Field label="确认密码">
+                <input
+                  type="password"
+                  className="input"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  placeholder="再次输入密码"
+                />
+              </Field>
+            )}
 
             {error && <div className="text-sm text-red-500">{error}</div>}
 
@@ -109,6 +123,7 @@ export function Login() {
               onClick={() => {
                 setMode(mode === "login" ? "register" : "login");
                 setError("");
+                setConfirmPassword("");
               }}
             >
               {mode === "login" ? "去注册" : "去登录"}

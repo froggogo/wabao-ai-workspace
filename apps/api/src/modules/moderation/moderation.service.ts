@@ -52,6 +52,41 @@ export class ModerationService {
     return result;
   }
 
+  /** 审核记录只读查询（M9 审计）：默认查当前用户，可按 flagged / ref_type 过滤 */
+  async listRecords(
+    userId: string,
+    opts: { page?: number; pageSize?: number; flagged?: boolean; refType?: ModerationRefType } = {},
+  ) {
+    const page = Math.max(1, opts.page ?? 1);
+    const pageSize = Math.min(100, Math.max(1, opts.pageSize ?? 20));
+    const where = {
+      userId,
+      ...(opts.flagged !== undefined ? { flagged: opts.flagged } : {}),
+      ...(opts.refType ? { refType: opts.refType } : {}),
+    };
+    const [items, total] = await Promise.all([
+      this.prisma.moderationRecord.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+      this.prisma.moderationRecord.count({ where }),
+    ]);
+    return {
+      data: items.map((r) => ({
+        id: r.id,
+        ref_type: r.refType,
+        ref_id: r.refId,
+        flagged: r.flagged,
+        categories: r.categories,
+        action: r.action,
+        created_at: r.createdAt,
+      })),
+      pagination: { page, page_size: pageSize, total },
+    };
+  }
+
   private checkLocal(text: string): ModerationResult {
     const hit = this.blockWords.filter((w) => text.includes(w));
     return {

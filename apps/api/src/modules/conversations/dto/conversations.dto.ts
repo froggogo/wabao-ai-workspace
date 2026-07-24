@@ -1,7 +1,9 @@
-import { IsBoolean, IsIn, IsOptional, IsString, MinLength } from 'class-validator';
+import { IsBoolean, IsIn, IsNumber, IsOptional, IsString, Max, Min, MinLength } from 'class-validator';
 import { ModelId } from '../../../ai/models';
 
 const MODEL_IDS: ModelId[] = ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'];
+const REASONING_EFFORTS = ['low', 'medium', 'high'] as const;
+type ReasoningEffort = (typeof REASONING_EFFORTS)[number];
 
 export class CreateConversationDto {
   @IsString()
@@ -35,6 +37,17 @@ export class UpdateConversationDto {
   @IsString()
   @IsOptional()
   assistant_id?: string;
+
+  @IsNumber()
+  @IsOptional()
+  @Min(0)
+  @Max(2)
+  temperature?: number;
+
+  @IsString()
+  @IsOptional()
+  @IsIn(REASONING_EFFORTS)
+  reasoning_effort?: ReasoningEffort;
 }
 
 export class SendMessageDto {

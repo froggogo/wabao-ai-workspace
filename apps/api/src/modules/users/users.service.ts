@@ -68,6 +68,7 @@ export class UsersService {
       plan: user.plan,
       quota_tokens: user.quotaTokens,
       used_tokens: usedTokens,
+      remaining_tokens: Math.max(0, user.quotaTokens - usedTokens),
       breakdown,
     };
   }

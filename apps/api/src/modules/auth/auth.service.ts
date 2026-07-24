@@ -5,7 +5,7 @@ import * as bcrypt from 'bcryptjs';
 import { createHash, randomUUID } from 'crypto';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AppException } from '../../common/errors';
-import { RegisterDto, LoginDto } from './dto/auth.dto';
+import { RegisterDto, LoginDto, ChangePasswordDto } from './dto/auth.dto';
 
 export interface Tokens {
   access_token: string;
@@ -79,6 +79,28 @@ export class AuthService {
       where: { tokenHash: this.hash(refreshToken) },
       data: { revoked: true },
     });
+  }
+
+  /** 修改密码：校验原密码 → 更新哈希 → 吊销全部 refresh token（强制重新登录） */
+  async changePassword(userId: string, dto: ChangePasswordDto): Promise<{ success: true }> {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) {
+      throw new AppException('not_found', '用户不存在');
+    }
+    const ok = await bcrypt.compare(dto.old_password, user.passwordHash);
+    if (!ok) {
+      throw new AppException('unauthorized', '原密码不正确');
+    }
+    if (dto.old_password === dto.new_password) {
+      throw new AppException('invalid_request', '新密码不能与原密码相同');
+    }
+    const passwordHash = await bcrypt.hash(dto.new_password, 10);
+    await this.prisma.user.update({ where: { id: userId }, data: { passwordHash } });
+    await this.prisma.refreshToken.updateMany({
+      where: { userId },
+      data: { revoked: true },
+    });
+    return { success: true };
   }
 
   private async issueTokens(userId: string, email: string): Promise<Tokens> {

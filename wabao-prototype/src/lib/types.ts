@@ -1,5 +1,7 @@
 export type ModelId = "gpt-5.6-sol" | "gpt-5.6-terra" | "gpt-5.6-luna";
 
+export type ReasoningEffort = "low" | "medium" | "high";
+
 export interface ModelInfo {
   id: ModelId;
   name: string;
@@ -33,6 +35,8 @@ export interface Conversation {
   model: ModelId;
   assistantId: string;
   pinned: boolean;
+  temperature: number;
+  reasoningEffort: ReasoningEffort;
   messages: ChatMessage[];
   createdAt: number;
   updatedAt: number;
@@ -65,4 +69,13 @@ export interface UsageBreakdown {
   label: string;
   calls: number;
   tokens: number;
+}
+
+export interface ModerationRecord {
+  id: string;
+  refType: "input" | "output";
+  flagged: boolean;
+  categories: string[];
+  action: "block" | "warn";
+  createdAt: number;
 }

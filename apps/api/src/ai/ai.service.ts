@@ -4,6 +4,13 @@ import OpenAI from 'openai';
 import { ChatTurn } from './prompt.service';
 import { ModelId } from './models';
 
+export type ReasoningEffort = 'low' | 'medium' | 'high';
+
+export interface GenerateOptions {
+  temperature?: number;
+  reasoningEffort?: ReasoningEffort;
+}
+
 /**
  * AI 编排层核心：统一对外提供「流式生成」能力。
  * - 配置了 OPENAI_API_KEY：调用 OpenAI Responses API（真实流式）。
@@ -30,20 +37,36 @@ export class AiService {
   }
 
   /** 统一的流式生成：逐块产出文本增量 */
-  async *stream(messages: ChatTurn[], model: ModelId, signal?: AbortSignal): AsyncGenerator<string> {
+  async *stream(
+    messages: ChatTurn[],
+    model: ModelId,
+    signal?: AbortSignal,
+    options?: GenerateOptions,
+  ): AsyncGenerator<string> {
     if (this.client) {
-      yield* this.streamOpenAI(messages, signal);
+      yield* this.streamOpenAI(messages, signal, options);
     } else {
       yield* this.streamMock(messages, model, signal);
     }
   }
 
-  private async *streamOpenAI(messages: ChatTurn[], signal?: AbortSignal): AsyncGenerator<string> {
+  private async *streamOpenAI(
+    messages: ChatTurn[],
+    signal?: AbortSignal,
+    options?: GenerateOptions,
+  ): AsyncGenerator<string> {
     const input = messages.map((m) => ({ role: m.role, content: m.content }));
-    const response = await this.client!.responses.create(
-      { model: this.realModel, input, stream: true },
-      { signal },
-    );
+    const payload: Record<string, unknown> = { model: this.realModel, input, stream: true };
+    if (options?.temperature !== undefined) {
+      payload.temperature = options.temperature;
+    }
+    // reasoning 仅对推理型模型（o 系列 / gpt-5 系列）生效，避免非推理模型报错
+    if (options?.reasoningEffort && /^o\d|gpt-5/i.test(this.realModel)) {
+      payload.reasoning = { effort: options.reasoningEffort };
+    }
+    const response = (await this.client!.responses.create(payload as never, {
+      signal,
+    })) as unknown as AsyncIterable<{ type: string; delta?: string }>;
     for await (const event of response) {
       if (signal?.aborted) return;
       if (event.type === 'response.output_text.delta' && event.delta) {

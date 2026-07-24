@@ -1,5 +1,12 @@
 import { create } from "zustand";
-import type { Assistant, ChatMessage, Conversation, Creation, ModelId } from "../lib/types";
+import type {
+  Assistant,
+  ChatMessage,
+  Conversation,
+  Creation,
+  ModelId,
+  ReasoningEffort,
+} from "../lib/types";
 import { api, tokens } from "../lib/api";
 
 let seq = 100;
@@ -10,6 +17,7 @@ interface AppState {
   loggedIn: boolean;
   userName: string;
   userEmail: string;
+  userAvatar: string;
 
   conversations: Conversation[];
   activeConversationId: string | null;
@@ -19,10 +27,11 @@ interface AppState {
   creations: Creation[];
 
   bootstrap: () => Promise<void>;
-  afterAuth: (me: { email: string; name: string }) => Promise<void>;
+  afterAuth: (me: { email: string; name: string; avatar?: string | null }) => Promise<void>;
   login: (email: string, password: string) => Promise<void>;
   register: (email: string, password: string, name?: string) => Promise<void>;
   logout: () => Promise<void>;
+  updateProfile: (input: { name?: string; avatar?: string }) => Promise<void>;
 
   openConversation: (id: string | null) => Promise<void>;
   setActiveConversation: (id: string | null) => void;
@@ -32,6 +41,8 @@ interface AppState {
   togglePin: (id: string) => Promise<void>;
   setConversationModel: (id: string, model: ModelId) => Promise<void>;
   setConversationAssistant: (id: string, assistantId: string) => Promise<void>;
+  setConversationTemperature: (id: string, temperature: number) => Promise<void>;
+  setConversationReasoning: (id: string, reasoningEffort: ReasoningEffort) => Promise<void>;
 
   addMessage: (conversationId: string, msg: ChatMessage) => void;
   updateMessage: (conversationId: string, msgId: string, patch: Partial<ChatMessage>) => void;
@@ -45,6 +56,7 @@ interface AppState {
 
   loadCreations: () => Promise<void>;
   addCreation: (c: Creation) => void;
+  deleteCreation: (id: string) => Promise<void>;
 }
 
 export const useApp = create<AppState>((set, get) => ({
@@ -52,6 +64,7 @@ export const useApp = create<AppState>((set, get) => ({
   loggedIn: false,
   userName: "",
   userEmail: "",
+  userAvatar: "",
 
   conversations: [],
   activeConversationId: null,
@@ -75,7 +88,7 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   // 内部：登录后加载初始数据
-  afterAuth: async (me: { email: string; name: string }) => {
+  afterAuth: async (me: { email: string; name: string; avatar?: string | null }) => {
     const [conversations, assistants] = await Promise.all([
       api.conversations.list(),
       api.assistants.list(),
@@ -85,6 +98,7 @@ export const useApp = create<AppState>((set, get) => ({
       loggedIn: true,
       userEmail: me.email,
       userName: me.name,
+      userAvatar: me.avatar ?? "",
       conversations,
       assistants,
       activeConversationId: conversations[0]?.id ?? null,
@@ -111,12 +125,18 @@ export const useApp = create<AppState>((set, get) => ({
       loggedIn: false,
       userName: "",
       userEmail: "",
+      userAvatar: "",
       conversations: [],
       assistants: [],
       creations: [],
       activeConversationId: null,
       loadedConversationIds: new Set(),
     });
+  },
+
+  updateProfile: async (input) => {
+    const updated = await api.users.update(input);
+    set({ userName: updated.name, userAvatar: updated.avatar ?? "" });
   },
 
   setActiveConversation: (id) => set({ activeConversationId: id }),
@@ -179,6 +199,20 @@ export const useApp = create<AppState>((set, get) => ({
       conversations: s.conversations.map((c) => (c.id === id ? { ...c, assistantId } : c)),
     }));
     await api.conversations.update(id, { assistant_id: assistantId }).catch(() => undefined);
+  },
+
+  setConversationTemperature: async (id, temperature) => {
+    set((s) => ({
+      conversations: s.conversations.map((c) => (c.id === id ? { ...c, temperature } : c)),
+    }));
+    await api.conversations.update(id, { temperature }).catch(() => undefined);
+  },
+
+  setConversationReasoning: async (id, reasoningEffort) => {
+    set((s) => ({
+      conversations: s.conversations.map((c) => (c.id === id ? { ...c, reasoningEffort } : c)),
+    }));
+    await api.conversations.update(id, { reasoning_effort: reasoningEffort }).catch(() => undefined);
   },
 
   addMessage: (conversationId, msg) =>
@@ -265,6 +299,11 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   addCreation: (c) => set((s) => ({ creations: [c, ...s.creations] })),
+
+  deleteCreation: async (id) => {
+    set((s) => ({ creations: s.creations.filter((c) => c.id !== id) }));
+    await api.creations.remove(id).catch(() => undefined);
+  },
 }));
 
 export const genId = uid;

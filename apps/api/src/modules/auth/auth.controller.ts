@@ -1,6 +1,14 @@
-import { Body, Controller, HttpCode, HttpStatus, Post } from '@nestjs/common';
+import { Body, Controller, HttpCode, HttpStatus, Post, UseGuards } from '@nestjs/common';
+import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { CurrentUser, CurrentUserData } from '../../common/decorators/current-user.decorator';
 import { AuthService } from './auth.service';
-import { LoginDto, LogoutDto, RefreshDto, RegisterDto } from './dto/auth.dto';
+import {
+  ChangePasswordDto,
+  LoginDto,
+  LogoutDto,
+  RefreshDto,
+  RegisterDto,
+} from './dto/auth.dto';
 
 @Controller('auth')
 export class AuthController {
@@ -29,5 +37,12 @@ export class AuthController {
   async logout(@Body() dto: LogoutDto) {
     await this.auth.logout(dto.refresh_token);
     return { success: true };
+  }
+
+  @Post('change-password')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard)
+  changePassword(@CurrentUser() user: CurrentUserData, @Body() dto: ChangePasswordDto) {
+    return this.auth.changePassword(user.id, dto);
   }
 }

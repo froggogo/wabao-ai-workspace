@@ -4,7 +4,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { AppException } from '../../common/errors';
 import { SseEvent } from '../../common/sse';
 import { AbortRegistry } from '../../common/abort-registry.service';
-import { AiService } from '../../ai/ai.service';
+import { AiService, ReasoningEffort } from '../../ai/ai.service';
 import { RouterService } from '../../ai/router.service';
 import { PromptService, ChatTurn } from '../../ai/prompt.service';
 import { estimateCost, estimateTokens, ModelId } from '../../ai/models';
@@ -80,6 +80,8 @@ export class ConversationsService {
         ...(dto.pinned !== undefined ? { pinned: dto.pinned } : {}),
         ...(dto.model !== undefined ? { model: dto.model } : {}),
         ...(dto.assistant_id !== undefined ? { assistantId: dto.assistant_id } : {}),
+        ...(dto.temperature !== undefined ? { temperature: dto.temperature } : {}),
+        ...(dto.reasoning_effort !== undefined ? { reasoningEffort: dto.reasoning_effort } : {}),
       },
     });
     return this.toConversationDto(c);
@@ -118,6 +120,9 @@ export class ConversationsService {
   ): AsyncGenerator<SseEvent> {
     const conversation = await this.findOwned(userId, conversationId);
     const model = this.router.resolve(dto.model ?? conversation.model);
+
+    // ⓪ 配额校验（超额则抛 429，在首个 SSE 事件前，返回标准 JSON 错误）
+    await this.usage.assertQuota(userId);
 
     // ① 输入审核
     const inMod = await this.moderation.check(dto.content, 'input', { userId });
@@ -159,6 +164,7 @@ export class ConversationsService {
     if (target.role !== 'assistant') {
       throw new AppException('invalid_request', '仅能重新生成 AI 回复');
     }
+    await this.usage.assertQuota(userId);
     const userMsg = await this.prisma.message.findFirst({
       where: { conversationId: conversation.id, role: 'user', createdAt: { lt: target.createdAt } },
       orderBy: { createdAt: 'desc' },
@@ -226,7 +232,16 @@ export class ConversationsService {
     let acc = '';
     let finishReason = 'stop';
     try {
-      for await (const delta of this.ai.stream(contextTurns, model, controller.signal)) {
+      const genOptions = {
+        temperature: conversation.temperature,
+        reasoningEffort: conversation.reasoningEffort as ReasoningEffort,
+      };
+      for await (const delta of this.ai.stream(
+        contextTurns,
+        model,
+        controller.signal,
+        genOptions,
+      )) {
         acc += delta;
         yield { event: 'message.delta', data: { text: delta } };
       }
@@ -367,6 +382,8 @@ export class ConversationsService {
       model: c.model,
       assistant_id: c.assistantId,
       pinned: c.pinned,
+      temperature: c.temperature,
+      reasoning_effort: c.reasoningEffort,
       created_at: c.createdAt,
       updated_at: c.updatedAt,
     };

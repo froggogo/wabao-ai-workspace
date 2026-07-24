@@ -82,6 +82,9 @@ export class CreationsService {
     const fields = this.parseFields(template);
     this.validateInputs(fields, dto.inputs);
 
+    // 配额校验（超额抛 429）
+    await this.usage.assertQuota(userId);
+
     const structured = template.outputSchema !== null && template.outputSchema !== undefined;
     const model = this.router.resolve('gpt-5.6-terra');
 

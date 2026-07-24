@@ -31,7 +31,12 @@ export function Studio() {
             <h1 className="text-2xl font-bold text-slate-800">创作工作室</h1>
             <p className="mt-1 text-sm text-slate-400">选择模板，填几个关键词即可一键生成内容</p>
           </div>
-          <div className="text-sm text-slate-400">历史创作 {creations.length} 条</div>
+          <button
+            onClick={() => navigate("/app/studio/history")}
+            className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm text-slate-600 transition hover:border-brand-300 hover:text-brand-600"
+          >
+            📚 创作历史 {creations.length > 0 ? `(${creations.length})` : ""}
+          </button>
         </div>
 
         <div className="mt-6 flex flex-wrap gap-2">

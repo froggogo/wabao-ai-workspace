@@ -1,4 +1,5 @@
-import { Body, Controller, Get, Patch, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Patch, Query, Res, UseGuards } from '@nestjs/common';
+import { Response } from 'express';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser, CurrentUserData } from '../../common/decorators/current-user.decorator';
 import { UsersService } from './users.service';
@@ -20,7 +21,13 @@ export class UsersController {
   }
 
   @Get('usage')
-  usage(@CurrentUser() user: CurrentUserData, @Query('period') period?: string) {
-    return this.users.usage(user.id, period);
+  async usage(
+    @CurrentUser() user: CurrentUserData,
+    @Res({ passthrough: true }) res: Response,
+    @Query('period') period?: string,
+  ) {
+    const data = await this.users.usage(user.id, period);
+    res.setHeader('X-Quota-Remaining', String(data.remaining_tokens));
+    return data;
   }
 }

@@ -6,6 +6,7 @@ import { Login } from "./pages/Login";
 import { Chat } from "./pages/Chat";
 import { Studio } from "./pages/Studio";
 import { StudioTemplate } from "./pages/StudioTemplate";
+import { StudioHistory } from "./pages/StudioHistory";
 import { Assistants } from "./pages/Assistants";
 import { Settings } from "./pages/Settings";
 import type { JSX } from "react";
@@ -47,7 +48,9 @@ export default function App() {
       >
         <Route index element={<Navigate to="/app/chat" replace />} />
         <Route path="chat" element={<Chat />} />
+        <Route path="chat/:conversationId" element={<Chat />} />
         <Route path="studio" element={<Studio />} />
+        <Route path="studio/history" element={<StudioHistory />} />
         <Route path="studio/:templateId" element={<StudioTemplate />} />
         <Route path="assistants" element={<Assistants />} />
         <Route path="settings" element={<Settings />} />
