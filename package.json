@@ -9,14 +9,25 @@
     "db:down": "cd apps/api && docker compose down",
     "db:init": "pnpm --dir apps/api prisma:push && pnpm --dir apps/api seed",
     "db:studio": "pnpm --dir apps/api exec prisma studio",
-    "dev:api": "pnpm --dir apps/api start:dev",
-    "dev:web": "pnpm --dir wabao-prototype dev",
+    "free:ports": "node scripts/free-port.mjs 3001 5173 5174",
+    "shared:build": "pnpm --dir packages/shared build",
+    "dev:api": "node scripts/free-port.mjs 3001 && pnpm --dir packages/shared build && pnpm --dir apps/api start:dev",
+    "dev:web": "node scripts/free-port.mjs 5173 && pnpm --dir packages/shared build && pnpm --dir wabao-prototype dev",
     "test": "pnpm --dir apps/api test",
     "test:e2e": "pnpm --dir apps/api test:e2e",
-    "build": "pnpm --dir apps/api build && pnpm --dir wabao-prototype build"
+    "build": "pnpm --dir packages/shared build && pnpm --dir apps/api build && pnpm --dir wabao-prototype build"
   },
   "engines": {
     "node": ">=20"
   },
-  "packageManager": "pnpm@10.19.0"
+  "packageManager": "pnpm@10.19.0",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@prisma/client",
+      "@prisma/engines",
+      "prisma",
+      "esbuild",
+      "@nestjs/core"
+    ]
+  }
 }

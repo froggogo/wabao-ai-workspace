@@ -6,9 +6,16 @@ import { ModelId } from './models';
 
 export type ReasoningEffort = 'low' | 'medium' | 'high';
 
+export interface TokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+}
+
 export interface GenerateOptions {
   temperature?: number;
   reasoningEffort?: ReasoningEffort;
+  /** 真实模式下，拿到上游返回的 usage 时回调（mock 模式不触发） */
+  onUsage?: (usage: TokenUsage) => void;
 }
 
 /**
@@ -66,11 +73,21 @@ export class AiService {
     }
     const response = (await this.client!.responses.create(payload as never, {
       signal,
-    })) as unknown as AsyncIterable<{ type: string; delta?: string }>;
+    })) as unknown as AsyncIterable<{
+      type: string;
+      delta?: string;
+      response?: { usage?: { input_tokens?: number; output_tokens?: number } };
+    }>;
     for await (const event of response) {
       if (signal?.aborted) return;
       if (event.type === 'response.output_text.delta' && event.delta) {
         yield event.delta;
+      } else if (event.type === 'response.completed' && event.response?.usage) {
+        const u = event.response.usage;
+        options?.onUsage?.({
+          inputTokens: u.input_tokens ?? 0,
+          outputTokens: u.output_tokens ?? 0,
+        });
       }
     }
   }

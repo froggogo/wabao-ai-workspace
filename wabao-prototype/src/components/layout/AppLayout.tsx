@@ -1,16 +1,18 @@
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useApp } from "../../store/appStore";
+import { PLAN_LABELS } from "../../lib/mockData";
 
 const NAV = [
   { to: "/app/chat", label: "对话", icon: "💬" },
   { to: "/app/studio", label: "创作", icon: "✨" },
   { to: "/app/assistants", label: "助手", icon: "🎭" },
+  { to: "/app/pricing", label: "会员", icon: "👑" },
   { to: "/app/settings", label: "设置", icon: "⚙️" },
 ];
 
 export function AppLayout() {
   const navigate = useNavigate();
-  const { userName, userEmail, userAvatar, logout } = useApp();
+  const { userName, userEmail, userAvatar, userPlan, logout } = useApp();
 
   return (
     <div className="flex h-full w-full bg-slate-50">
@@ -43,8 +45,21 @@ export function AppLayout() {
           >
             {userAvatar || userName.slice(0, 1).toUpperCase()}
           </button>
-          <div className="absolute bottom-0 left-14 z-20 hidden w-44 rounded-xl border border-slate-200 bg-white p-2 text-slate-700 shadow-xl group-hover:block">
+          <div className="absolute bottom-0 left-14 z-20 hidden w-48 rounded-xl border border-slate-200 bg-white p-2 text-slate-700 shadow-xl group-hover:block">
             <div className="px-2 py-1.5 text-xs text-slate-400">{userEmail}</div>
+            <div className="flex items-center justify-between px-2 py-1.5">
+              <span className="text-xs text-slate-400">当前套餐</span>
+              <span className="rounded-full bg-brand-50 px-2 py-0.5 text-xs font-medium text-brand-700">
+                {PLAN_LABELS[userPlan]}
+              </span>
+            </div>
+            <button
+              onClick={() => navigate("/app/pricing")}
+              className="w-full rounded-lg px-2 py-1.5 text-left text-sm text-brand-700 hover:bg-brand-50"
+            >
+              👑 升级会员
+            </button>
+            <div className="my-1 border-t border-slate-100" />
             <button
               onClick={() => {
                 logout();

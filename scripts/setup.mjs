@@ -49,11 +49,11 @@ log('准备环境变量 .env');
 ensureEnv(api);
 ensureEnv(web);
 
-// 2. 安装依赖
-log('安装后端依赖（apps/api）');
-run('pnpm install', api);
-log('安装前端依赖（wabao-prototype）');
-run('pnpm install', web);
+// 2. 安装依赖（pnpm workspace：根目录一次性安装全部子项目）
+log('安装 workspace 依赖（根目录，含 apps/* · packages/* · wabao-prototype）');
+run('pnpm install', root);
+log('构建共享契约包（packages/shared）');
+run('pnpm --dir packages/shared build', root);
 
 // 3. 数据库（Docker 可选）
 log('检查 Docker 是否可用');

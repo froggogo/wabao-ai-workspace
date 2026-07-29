@@ -24,8 +24,12 @@ wabao-ai/
 │   └── 2026-07-21-16_15-技术架构决策-前后端与选型.md
 ├── apps/
 │   └── api/                  # P1 后端 API（NestJS + TS + Prisma + PostgreSQL）
+├── packages/
+│   └── shared/               # 前后端共享契约（@wabao/shared：模型 / 会员套餐 / 常量）
 └── wabao-prototype/          # P1 高保真交互原型（React 19 + TS + Tailwind）
 ```
+
+> 采用 pnpm workspace：根目录 `pnpm install` 一次性安装 `apps/*`、`packages/*`、`wabao-prototype`；`@wabao/shared` 为前后端唯一契约来源，避免常量漂移。
 
 ## 文档索引
 

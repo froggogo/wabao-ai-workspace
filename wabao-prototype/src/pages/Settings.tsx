@@ -2,9 +2,8 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useApp } from "../store/appStore";
 import { api, ApiError } from "../lib/api";
-import type { ModerationRecord, UsageBreakdown } from "../lib/types";
-
-const PLAN_LABEL: Record<string, string> = { free: "免费版", pro: "专业版", team: "团队版" };
+import { PLAN_LABELS } from "../lib/mockData";
+import type { ModerationRecord, PlanId, UsageBreakdown } from "../lib/types";
 
 interface UsageState {
   plan: string;
@@ -16,10 +15,11 @@ interface UsageState {
 type Tab = "usage" | "profile" | "audit";
 
 export function Settings() {
+  const navigate = useNavigate();
   const [tab, setTab] = useState<Tab>("usage");
-  const { userName, userEmail, userAvatar } = useApp();
+  const { userName, userEmail, userAvatar, userPlan, setPlan } = useApp();
   const [usage, setUsage] = useState<UsageState>({
-    plan: "free",
+    plan: userPlan,
     usedTokens: 0,
     quotaTokens: 100000,
     breakdown: [],
@@ -28,19 +28,20 @@ export function Settings() {
   useEffect(() => {
     api.users
       .usage()
-      .then((u) =>
+      .then((u) => {
         setUsage({
           plan: u.plan,
           usedTokens: u.used_tokens,
           quotaTokens: u.quota_tokens,
           breakdown: u.breakdown,
-        }),
-      )
+        });
+        if (u.plan) setPlan(u.plan as PlanId);
+      })
       .catch(() => undefined);
-  }, []);
+  }, [setPlan]);
 
   const USAGE = {
-    plan: PLAN_LABEL[usage.plan] ?? usage.plan,
+    plan: PLAN_LABELS[userPlan] ?? usage.plan,
     usedTokens: usage.usedTokens,
     quotaTokens: usage.quotaTokens,
     breakdown: usage.breakdown,
@@ -64,9 +65,17 @@ export function Settings() {
             <div className="rounded-2xl border border-slate-200 bg-white p-5">
               <div className="flex items-center justify-between">
                 <span className="text-sm text-slate-500">当前套餐</span>
-                <span className="rounded-full bg-brand-50 px-3 py-1 text-sm font-medium text-brand-700">
-                  {USAGE.plan}
-                </span>
+                <div className="flex items-center gap-2">
+                  <span className="rounded-full bg-brand-50 px-3 py-1 text-sm font-medium text-brand-700">
+                    {USAGE.plan}
+                  </span>
+                  <button
+                    onClick={() => navigate("/app/pricing")}
+                    className="rounded-full bg-brand-600 px-3 py-1 text-sm font-medium text-white transition hover:bg-brand-700"
+                  >
+                    {userPlan === "enterprise" ? "管理套餐" : "升级套餐 ↑"}
+                  </button>
+                </div>
               </div>
               <div className="mt-4">
                 <div className="mb-1.5 flex justify-between text-sm">

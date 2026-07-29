@@ -1,18 +1,7 @@
-export type ModelId = 'gpt-5.6-sol' | 'gpt-5.6-terra' | 'gpt-5.6-luna';
-
-export const MODELS: { id: ModelId; name: string; desc: string }[] = [
-  { id: 'gpt-5.6-sol', name: 'GPT-5.6 Sol', desc: '旗舰推理 · 复杂任务' },
-  { id: 'gpt-5.6-terra', name: 'GPT-5.6 Terra', desc: '均衡 · 日常首选' },
-  { id: 'gpt-5.6-luna', name: 'GPT-5.6 Luna', desc: '高性价比 · 高并发' },
-];
-
-const MODEL_IDS = MODELS.map((m) => m.id);
-
-export function isValidModel(model: string): model is ModelId {
-  return (MODEL_IDS as string[]).includes(model);
-}
-
-export const DEFAULT_MODEL: ModelId = 'gpt-5.6-terra';
+// 模型清单与校验来自前后端共享契约包，避免两端漂移。
+import { ModelId, DEFAULT_MODEL } from '@wabao/shared';
+export { MODELS, DEFAULT_MODEL, isValidModel } from '@wabao/shared';
+export type { ModelId, ModelInfo } from '@wabao/shared';
 
 /** 每 1K token 的估算成本（人民币，示意值，用于用量/计费展示） */
 export const MODEL_PRICE_PER_1K: Record<ModelId, { input: number; output: number }> = {
@@ -27,8 +16,14 @@ export function estimateCost(model: ModelId, inputTokens: number, outputTokens: 
   return Math.round(cost * 10000) / 10000;
 }
 
-/** 粗略 token 估算：中英文混合按字符近似，避免额外依赖 tokenizer */
+/**
+ * 粗略 token 估算（无 tokenizer 依赖，仅在拿不到上游真实 usage 时兜底）：
+ * - 中日韩表意文字按 ~1.5 token/字（GPT 系分词器对中文通常 1 字≈1~2 token）；
+ * - 其余字符（英文/数字/标点/空格）按 ~4 字符/token。
+ */
 export function estimateTokens(text: string): number {
   if (!text) return 0;
-  return Math.max(1, Math.ceil(text.length / 2.5));
+  const cjk = (text.match(/[\u3400-\u9fff\uf900-\ufaff\u3040-\u30ff\uac00-\ud7af]/gu) ?? []).length;
+  const other = [...text].length - cjk;
+  return Math.max(1, Math.ceil(cjk * 1.5 + other / 4));
 }

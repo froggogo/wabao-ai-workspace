@@ -1,15 +1,16 @@
 import { Injectable } from '@nestjs/common';
-import { Conversation, Message } from '@prisma/client';
+import { Conversation, Message, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AppException } from '../../common/errors';
 import { SseEvent } from '../../common/sse';
 import { AbortRegistry } from '../../common/abort-registry.service';
-import { AiService, ReasoningEffort } from '../../ai/ai.service';
+import { AiService, ReasoningEffort, TokenUsage } from '../../ai/ai.service';
 import { RouterService } from '../../ai/router.service';
 import { PromptService, ChatTurn } from '../../ai/prompt.service';
 import { estimateCost, estimateTokens, ModelId } from '../../ai/models';
 import { ModerationService } from '../moderation/moderation.service';
 import { UsageService } from '../users/usage.service';
+import { BillingService } from '../billing/billing.service';
 import {
   CreateConversationDto,
   FeedbackDto,
@@ -18,6 +19,9 @@ import {
 } from './dto/conversations.dto';
 
 const HISTORY_LIMIT = 20;
+
+/** 输出审核命中拦截时，用于替换违规内容的脱敏提示（落库 + 前端展示） */
+const OUTPUT_BLOCKED_NOTICE = '⚠️ 该回复包含不符合规范的内容，已被拦截。';
 
 @Injectable()
 export class ConversationsService {
@@ -28,20 +32,32 @@ export class ConversationsService {
     private readonly prompt: PromptService,
     private readonly moderation: ModerationService,
     private readonly usage: UsageService,
+    private readonly billing: BillingService,
     private readonly abortRegistry: AbortRegistry,
   ) {}
 
   // ---------- 会话 CRUD ----------
 
-  async list(userId: string, q?: string) {
-    const items = await this.prisma.conversation.findMany({
-      where: {
-        userId,
-        ...(q ? { title: { contains: q, mode: 'insensitive' } } : {}),
-      },
-      orderBy: [{ pinned: 'desc' }, { updatedAt: 'desc' }],
-    });
-    return items.map((c) => this.toConversationDto(c));
+  async list(userId: string, q?: string, page = 1, pageSize = 50) {
+    const safePage = Math.max(1, page);
+    const safeSize = Math.min(100, Math.max(1, pageSize));
+    const where: Prisma.ConversationWhereInput = {
+      userId,
+      ...(q ? { title: { contains: q, mode: 'insensitive' } } : {}),
+    };
+    const [items, total] = await Promise.all([
+      this.prisma.conversation.findMany({
+        where,
+        orderBy: [{ pinned: 'desc' }, { updatedAt: 'desc' }],
+        skip: (safePage - 1) * safeSize,
+        take: safeSize,
+      }),
+      this.prisma.conversation.count({ where }),
+    ]);
+    return {
+      data: items.map((c) => this.toConversationDto(c)),
+      pagination: { page: safePage, page_size: safeSize, total },
+    };
   }
 
   async create(userId: string, dto: CreateConversationDto) {
@@ -121,8 +137,10 @@ export class ConversationsService {
     const conversation = await this.findOwned(userId, conversationId);
     const model = this.router.resolve(dto.model ?? conversation.model);
 
-    // ⓪ 配额校验（超额则抛 429，在首个 SSE 事件前，返回标准 JSON 错误）
+    // ⓪ 配额校验（超额则抛 429）+ 模型权限校验（套餐不含则抛 403），
+    //    均在首个 SSE 事件前，返回标准 JSON 错误
     await this.usage.assertQuota(userId);
+    await this.billing.assertModelAllowed(userId, model);
 
     // ① 输入审核
     const inMod = await this.moderation.check(dto.content, 'input', { userId });
@@ -165,6 +183,7 @@ export class ConversationsService {
       throw new AppException('invalid_request', '仅能重新生成 AI 回复');
     }
     await this.usage.assertQuota(userId);
+    await this.billing.assertModelAllowed(userId, this.router.resolve(conversation.model));
     const userMsg = await this.prisma.message.findFirst({
       where: { conversationId: conversation.id, role: 'user', createdAt: { lt: target.createdAt } },
       orderBy: { createdAt: 'desc' },
@@ -231,10 +250,14 @@ export class ConversationsService {
 
     let acc = '';
     let finishReason = 'stop';
+    let realUsage: TokenUsage | null = null;
     try {
       const genOptions = {
         temperature: conversation.temperature,
         reasoningEffort: conversation.reasoningEffort as ReasoningEffort,
+        onUsage: (u: TokenUsage) => {
+          realUsage = u;
+        },
       };
       for await (const delta of this.ai.stream(
         contextTurns,
@@ -259,20 +282,24 @@ export class ConversationsService {
     }
     this.abortRegistry.clear(assistantMsg.id);
 
-    // ② 输出审核
+    // ② 输出审核：命中拦截则用脱敏提示替换违规内容（落库与前端展示），
+    //    但计费仍按模型实际生成的内容(acc)计量。
     const outMod = await this.moderation.check(acc, 'output', {
       userId,
       refId: assistantMsg.id,
     });
     const flagged = outMod.action === 'block';
+    const storedContent = flagged ? OUTPUT_BLOCKED_NOTICE : acc;
 
     const { inputTokens, outputTokens } = await this.finalizeMessage(
       assistantMsg.id,
-      acc,
+      storedContent,
       model,
       contextTurns,
-      finishReason,
+      flagged ? 'content_filter' : finishReason,
       flagged,
+      acc,
+      realUsage,
     );
 
     await this.usage.record({ userId, feature: 'chat', model, inputTokens, outputTokens });
@@ -282,6 +309,7 @@ export class ConversationsService {
       data: {
         finish_reason: flagged ? 'content_filter' : finishReason,
         usage: { input_tokens: inputTokens, output_tokens: outputTokens },
+        ...(flagged ? { flagged: true, filtered_content: storedContent } : {}),
       },
     };
   }
@@ -293,9 +321,14 @@ export class ConversationsService {
     contextTurns: ChatTurn[],
     finishReason: string,
     flagged: boolean,
+    billBasis?: string,
+    realUsage?: TokenUsage | null,
   ): Promise<{ inputTokens: number; outputTokens: number }> {
-    const inputTokens = contextTurns.reduce((sum, t) => sum + estimateTokens(t.content), 0);
-    const outputTokens = estimateTokens(content);
+    // 优先使用上游返回的真实 usage；拿不到时用本地估算兜底。
+    // 计费/落库的输出 token 基于实际生成内容(billBasis)，content 可能是脱敏文本。
+    const inputTokens =
+      realUsage?.inputTokens ?? contextTurns.reduce((sum, t) => sum + estimateTokens(t.content), 0);
+    const outputTokens = realUsage?.outputTokens ?? estimateTokens(billBasis ?? content);
     await this.prisma.message.update({
       where: { id: messageId },
       data: {
@@ -319,15 +352,18 @@ export class ConversationsService {
       ? await this.prisma.assistant.findUnique({ where: { id: conversation.assistantId } })
       : null;
 
-    const historyRows = await this.prisma.message.findMany({
+    // 取「最近」HISTORY_LIMIT 条历史：倒序查询后反转为时间正序，
+    // 避免长会话里永远只带上最早的历史而丢失近期上下文。
+    const recentRows = await this.prisma.message.findMany({
       where: {
         conversationId: conversation.id,
         id: { not: excludeMessageId },
         content: { not: '' },
       },
-      orderBy: { createdAt: 'asc' },
+      orderBy: { createdAt: 'desc' },
       take: HISTORY_LIMIT,
     });
+    const historyRows = recentRows.reverse();
 
     const history = historyRows.map((m) => ({
       role: m.role as 'user' | 'assistant',

@@ -111,7 +111,13 @@ async function tryRefresh(): Promise<boolean> {
 export interface StreamHandlers {
   onStart?: (id: string) => void;
   onDelta?: (text: string) => void;
-  onDone?: (data: { finish_reason?: string; usage?: unknown; output_json?: unknown }) => void;
+  onDone?: (data: {
+    finish_reason?: string;
+    usage?: unknown;
+    output_json?: unknown;
+    flagged?: boolean;
+    filtered_content?: string;
+  }) => void;
   onError?: (err: ApiError) => void;
   signal?: AbortSignal;
 }
@@ -377,6 +383,30 @@ export const api = {
       }>(`/usage${period ? `?period=${period}` : ""}`),
   },
 
+  billing: {
+    /** 创建 / 变更订阅（原型：无支付立即生效，企业版走联系销售由前端拦截） */
+    subscribe: (plan: string, cycle: "monthly" | "yearly" = "monthly") =>
+      request<{
+        plan: string;
+        name: string;
+        cycle: string;
+        status: string;
+        quota_tokens: number;
+        allowed_models: string[];
+      }>("/billing/subscriptions", {
+        method: "POST",
+        body: { plan, cycle },
+      }),
+    subscription: () =>
+      request<{
+        plan: string;
+        name: string;
+        status: string;
+        quota_tokens: number;
+        allowed_models: string[];
+      }>("/billing/subscription"),
+  },
+
   moderation: {
     async records(params?: { page?: number; flagged?: boolean }): Promise<ModerationRecord[]> {
       const q = new URLSearchParams();
@@ -430,7 +460,10 @@ export const api = {
 
   conversations: {
     async list(): Promise<Conversation[]> {
-      return (await request<RawConversation[]>("/conversations")).map(mapConversation);
+      // 后端已分页；原型侧栏一次拉取较大页（request 会自动解包 data 数组）
+      return (await request<RawConversation[]>("/conversations?page=1&page_size=100")).map(
+        mapConversation,
+      );
     },
     async create(input: { title?: string; model?: ModelId; assistant_id?: string }): Promise<Conversation> {
       return mapConversation(

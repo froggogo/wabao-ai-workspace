@@ -1,12 +1,10 @@
-export type ModelId = "gpt-5.6-sol" | "gpt-5.6-terra" | "gpt-5.6-luna";
+// 模型 / 套餐等契约类型来自前后端共享包 @wabao/shared
+import type { ModelId, ModelInfo, PlanId, BillingCycle, PlanCatalogEntry } from "@wabao/shared";
+export type { ModelId, ModelInfo, PlanId, BillingCycle };
+/** 套餐目录条目（等价于共享包的 PlanCatalogEntry） */
+export type Plan = PlanCatalogEntry;
 
 export type ReasoningEffort = "low" | "medium" | "high";
-
-export interface ModelInfo {
-  id: ModelId;
-  name: string;
-  desc: string;
-}
 
 export interface Assistant {
   id: string;
@@ -78,4 +76,17 @@ export interface ModerationRecord {
   categories: string[];
   action: "block" | "warn";
   createdAt: number;
+}
+
+// ---------------- 会员 / 套餐（UI 专用类型） ----------------
+
+export type PlanCellValue = boolean | string;
+
+export interface PlanMatrixRow {
+  /** 权益名称 */
+  label: string;
+  /** 分组标题（用于表格分区） */
+  group: string;
+  /** 各套餐对应的取值：true=✓，false=✗，字符串=具体说明 */
+  values: Record<PlanId, PlanCellValue>;
 }

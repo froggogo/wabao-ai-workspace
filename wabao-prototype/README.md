@@ -21,7 +21,8 @@ pnpm preview  # 预览构建产物
 - **对话（核心）**：多会话管理（新建/搜索/重命名/置顶/删除）、**模拟流式输出**（打字机 + 光标）、停止生成、重新生成、复制、点赞/点踩、Markdown/代码渲染、模型切换（Sol/Terra/Luna）、人设切换、**输入审核拦截**演示（输入含“暴力/违法/血腥”会被拦截）。
 - **创作工作室**：模板库（分类筛选）、根据 `input_schema` 动态渲染表单、流式生成、结构化输出模板（JSON）、复制/重生成、历史记录。
 - **助手管理**：人设 CRUD（头像/名称/system prompt/默认模型）。
-- **设置**：用量配额进度条（超 80% 预警）+ 用量明细表、个人信息。
+- **会员升级**：定价页（免费/Plus/Pro/团队/企业）、月付/年付切换、套餐卡片 + 权益详细对比表、升级确认弹窗（参考 ChatGPT 价格区间本地化，原型为前端模拟不扣费）。
+- **设置**：用量配额进度条（超 80% 预警）+ 用量明细表、当前套餐 + 升级入口、个人信息。
 
 ## 工程结构
 
@@ -31,18 +32,19 @@ src/
 ├── App.tsx                 # 路由 + 登录守卫
 ├── index.css               # Tailwind v4 + 主题变量
 ├── lib/
-│   ├── types.ts            # 全局类型（可迁移为共享契约包）
-│   ├── mockData.ts         # 模拟数据
-│   └── mockAI.ts           # 模拟流式 AI + 审核（正式版替换为后端 SSE）
+│   ├── types.ts            # 全局类型（对应后端 DTO，可迁移为共享契约包）
+│   ├── api.ts              # REST + SSE 客户端（对接真实后端）
+│   └── mockData.ts         # 静态展示目录（模型 / 会员套餐 / 权益对比）
 ├── store/appStore.ts       # Zustand 全局状态
 ├── components/
 │   ├── Markdown.tsx        # 轻量 Markdown 渲染
 │   └── layout/AppLayout.tsx
-└── pages/                  # Login / Chat / Studio / StudioTemplate / Assistants / Settings
+└── pages/                  # Login / Chat / Studio / StudioTemplate / Assistants / Pricing / Settings
 ```
 
 ## 说明
 
-- 本原型为**纯前端**演示，AI 回复与流式为 `mockAI.ts` 模拟。
-- 接入真实后端时，只需把 `mockAI.streamChat / streamCreation` 换成对接 `POST /conversations/:id/messages`（SSE）与 `POST /creations` 的调用，其余交互不变。
+- 本原型已**对接真实后端**（NestJS），对话/创作走 `POST /conversations/:id/messages`、`POST /creations` 的 SSE 流式；会员升级走 `POST /billing/subscriptions`。
+- 后端未配置 `OPENAI_API_KEY` 时自动进入 mock 模式（返回模拟流式内容），链路照样跑通。
+- `lib/mockData.ts` 仅保留**静态展示目录**（模型列表、会员套餐与权益对比）；其余业务数据均来自后端 API。
 - `lib/types.ts` 的类型对应后端 DTO，未来可抽到 monorepo 的 `packages/shared` 前后端共享。

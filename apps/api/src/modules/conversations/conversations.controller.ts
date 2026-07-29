@@ -36,8 +36,18 @@ export class ConversationsController {
   ) {}
 
   @Get('conversations')
-  list(@CurrentUser() user: CurrentUserData, @Query('q') q?: string) {
-    return this.conversations.list(user.id, q);
+  list(
+    @CurrentUser() user: CurrentUserData,
+    @Query('q') q?: string,
+    @Query('page') page?: string,
+    @Query('page_size') pageSize?: string,
+  ) {
+    return this.conversations.list(
+      user.id,
+      q,
+      page ? Number(page) : 1,
+      pageSize ? Number(pageSize) : 50,
+    );
   }
 
   @Post('conversations')
@@ -182,6 +192,10 @@ export class ConversationsController {
         case 'message.done':
           usage = data.usage;
           finishReason = data.finish_reason as string;
+          // 输出被拦截：用脱敏文本替换聚合内容，避免返回违规输出
+          if (data.flagged && typeof data.filtered_content === 'string') {
+            content = data.filtered_content;
+          }
           break;
         case 'error':
           throw new AppException(

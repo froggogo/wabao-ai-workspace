@@ -5,6 +5,7 @@ import type {
   Conversation,
   Creation,
   ModelId,
+  PlanId,
   ReasoningEffort,
 } from "../lib/types";
 import { api, tokens } from "../lib/api";
@@ -18,6 +19,7 @@ interface AppState {
   userName: string;
   userEmail: string;
   userAvatar: string;
+  userPlan: PlanId;
 
   conversations: Conversation[];
   activeConversationId: string | null;
@@ -27,11 +29,13 @@ interface AppState {
   creations: Creation[];
 
   bootstrap: () => Promise<void>;
-  afterAuth: (me: { email: string; name: string; avatar?: string | null }) => Promise<void>;
+  afterAuth: (me: { email: string; name: string; avatar?: string | null; plan?: string | null }) => Promise<void>;
   login: (email: string, password: string) => Promise<void>;
   register: (email: string, password: string, name?: string) => Promise<void>;
   logout: () => Promise<void>;
   updateProfile: (input: { name?: string; avatar?: string }) => Promise<void>;
+  setPlan: (plan: PlanId) => void;
+  upgradePlan: (plan: PlanId) => Promise<void>;
 
   openConversation: (id: string | null) => Promise<void>;
   setActiveConversation: (id: string | null) => void;
@@ -65,6 +69,7 @@ export const useApp = create<AppState>((set, get) => ({
   userName: "",
   userEmail: "",
   userAvatar: "",
+  userPlan: "free",
 
   conversations: [],
   activeConversationId: null,
@@ -88,7 +93,7 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   // 内部：登录后加载初始数据
-  afterAuth: async (me: { email: string; name: string; avatar?: string | null }) => {
+  afterAuth: async (me) => {
     const [conversations, assistants] = await Promise.all([
       api.conversations.list(),
       api.assistants.list(),
@@ -99,6 +104,7 @@ export const useApp = create<AppState>((set, get) => ({
       userEmail: me.email,
       userName: me.name,
       userAvatar: me.avatar ?? "",
+      userPlan: (me.plan as PlanId) ?? "free",
       conversations,
       assistants,
       activeConversationId: conversations[0]?.id ?? null,
@@ -126,6 +132,7 @@ export const useApp = create<AppState>((set, get) => ({
       userName: "",
       userEmail: "",
       userAvatar: "",
+      userPlan: "free",
       conversations: [],
       assistants: [],
       creations: [],
@@ -137,6 +144,15 @@ export const useApp = create<AppState>((set, get) => ({
   updateProfile: async (input) => {
     const updated = await api.users.update(input);
     set({ userName: updated.name, userAvatar: updated.avatar ?? "" });
+  },
+
+  setPlan: (plan) => set({ userPlan: plan }),
+
+  // 调用后端创建/变更订阅（原型：无支付立即生效），以返回结果为准。
+  // 失败则抛出，由调用方提示；企业版由 Pricing 页拦截为“联系销售”。
+  upgradePlan: async (plan) => {
+    const res = await api.billing.subscribe(plan);
+    set({ userPlan: (res.plan as PlanId) ?? plan });
   },
 
   setActiveConversation: (id) => set({ activeConversationId: id }),

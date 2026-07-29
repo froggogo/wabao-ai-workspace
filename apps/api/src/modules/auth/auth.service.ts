@@ -124,7 +124,22 @@ export class AuthService {
       },
     });
 
+    // 顺带清理该用户已吊销/过期的 refresh token，避免表无限增长
+    await this.cleanupRefreshTokens(userId);
+
     return { access_token, refresh_token, expires_in: accessTtl };
+  }
+
+  /** 删除该用户已吊销或已过期的 refresh token（不影响当前有效令牌） */
+  private async cleanupRefreshTokens(userId: string): Promise<void> {
+    await this.prisma.refreshToken
+      .deleteMany({
+        where: {
+          userId,
+          OR: [{ revoked: true }, { expiresAt: { lt: new Date() } }],
+        },
+      })
+      .catch(() => undefined);
   }
 
   private async seedDefaultAssistants(userId: string): Promise<void> {

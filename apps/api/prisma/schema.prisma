@@ -12,8 +12,10 @@ datasource db {
 
 enum Plan {
   free
+  plus
   pro
   team
+  enterprise
 }
 
 enum MessageRole {

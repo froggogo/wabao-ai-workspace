@@ -9,6 +9,7 @@ import { StudioTemplate } from "./pages/StudioTemplate";
 import { StudioHistory } from "./pages/StudioHistory";
 import { Assistants } from "./pages/Assistants";
 import { Settings } from "./pages/Settings";
+import { Pricing } from "./pages/Pricing";
 import type { JSX } from "react";
 
 function RequireAuth({ children }: { children: JSX.Element }) {
@@ -53,6 +54,7 @@ export default function App() {
         <Route path="studio/history" element={<StudioHistory />} />
         <Route path="studio/:templateId" element={<StudioTemplate />} />
         <Route path="assistants" element={<Assistants />} />
+        <Route path="pricing" element={<Pricing />} />
         <Route path="settings" element={<Settings />} />
       </Route>
       <Route path="*" element={<Navigate to="/app/chat" replace />} />

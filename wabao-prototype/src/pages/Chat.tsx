@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useApp, genId } from "../store/appStore";
-import { MODELS } from "../lib/mockData";
+import { MODELS, PLAN_ALLOWED_MODELS } from "../lib/mockData";
 import { api } from "../lib/api";
 import { Markdown } from "../components/Markdown";
 import type { Conversation, ReasoningEffort } from "../lib/types";
@@ -26,6 +26,7 @@ export function Chat() {
     setConversationAssistant,
     setConversationTemperature,
     setConversationReasoning,
+    userPlan,
     addMessage,
     updateMessage,
     replaceMessageId,
@@ -111,6 +112,15 @@ export function Chat() {
             acc += t;
             updateMessage(convId, currentAiRef.current!, { content: acc });
           },
+          onDone: (data) => {
+            if (data.flagged) {
+              updateMessage(convId, currentAiRef.current!, {
+                content: data.filtered_content ?? "⚠️ 该回复包含不符合规范的内容，已被拦截。",
+                flagged: true,
+                streaming: false,
+              });
+            }
+          },
           onError: (err) => {
             updateMessage(convId, currentAiRef.current!, {
               content: `⚠️ ${err.message}`,
@@ -151,6 +161,15 @@ export function Chat() {
         onDelta: (t) => {
           acc += t;
           updateMessage(convId, currentAiRef.current!, { content: acc });
+        },
+        onDone: (data) => {
+          if (data.flagged) {
+            updateMessage(convId, currentAiRef.current!, {
+              content: data.filtered_content ?? "⚠️ 该回复包含不符合规范的内容，已被拦截。",
+              flagged: true,
+              streaming: false,
+            });
+          }
         },
         onError: (err) => {
           updateMessage(convId, currentAiRef.current!, {
@@ -332,20 +351,31 @@ export function Chat() {
           <div>
             <div className="mb-2 text-xs font-medium text-slate-400">模型</div>
             <div className="space-y-1.5">
-              {MODELS.map((mo) => (
-                <button
-                  key={mo.id}
-                  onClick={() => setConversationModel(active.id, mo.id)}
-                  className={`w-full rounded-xl border p-2.5 text-left transition ${
-                    active.model === mo.id
-                      ? "border-brand-400 bg-brand-50"
-                      : "border-slate-200 hover:border-slate-300"
-                  }`}
-                >
-                  <div className="text-sm font-medium text-slate-700">{mo.name}</div>
-                  <div className="text-[11px] text-slate-400">{mo.desc}</div>
-                </button>
-              ))}
+              {MODELS.map((mo) => {
+                const locked = !PLAN_ALLOWED_MODELS[userPlan].includes(mo.id);
+                return (
+                  <button
+                    key={mo.id}
+                    onClick={() =>
+                      locked ? navigate("/app/pricing") : setConversationModel(active.id, mo.id)
+                    }
+                    title={locked ? "当前套餐不可用，点击升级解锁" : undefined}
+                    className={`w-full rounded-xl border p-2.5 text-left transition ${
+                      locked
+                        ? "border-slate-200 bg-slate-50 opacity-70 hover:border-brand-200"
+                        : active.model === mo.id
+                          ? "border-brand-400 bg-brand-50"
+                          : "border-slate-200 hover:border-slate-300"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-medium text-slate-700">{mo.name}</span>
+                      {locked && <span className="text-xs text-amber-500">🔒 升级解锁</span>}
+                    </div>
+                    <div className="text-[11px] text-slate-400">{mo.desc}</div>
+                  </button>
+                );
+              })}
             </div>
           </div>
 

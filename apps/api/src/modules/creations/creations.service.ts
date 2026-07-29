@@ -3,7 +3,7 @@ import { Prisma, Template } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AppException } from '../../common/errors';
 import { SseEvent } from '../../common/sse';
-import { AiService } from '../../ai/ai.service';
+import { AiService, TokenUsage } from '../../ai/ai.service';
 import { RouterService } from '../../ai/router.service';
 import { PromptService } from '../../ai/prompt.service';
 import { estimateCost, estimateTokens } from '../../ai/models';
@@ -126,6 +126,7 @@ export class CreationsService {
     });
 
     let acc = '';
+    const usageRef: { current: TokenUsage | null } = { current: null };
     try {
       if (structured && this.ai.isMock) {
         // mock 模式下结构化模板：直接产出示例 JSON，保证 output_json 有效
@@ -136,7 +137,11 @@ export class CreationsService {
           yield { event: 'message.delta', data: { text: piece } };
         }
       } else {
-        for await (const delta of this.ai.stream(turns, model)) {
+        for await (const delta of this.ai.stream(turns, model, undefined, {
+          onUsage: (u: TokenUsage) => {
+            usageRef.current = u;
+          },
+        })) {
           acc += delta;
           yield { event: 'message.delta', data: { text: delta } };
         }
@@ -157,8 +162,10 @@ export class CreationsService {
       outputJson = this.tryParseJson(acc);
     }
 
-    const inputTokens = turns.reduce((s, t) => s + estimateTokens(t.content), 0);
-    const outputTokens = estimateTokens(acc);
+    // 优先使用上游真实 usage，拿不到时本地估算兜底
+    const inputTokens =
+      usageRef.current?.inputTokens ?? turns.reduce((s, t) => s + estimateTokens(t.content), 0);
+    const outputTokens = usageRef.current?.outputTokens ?? estimateTokens(acc);
 
     await this.prisma.creation.update({
       where: { id: creation.id },
