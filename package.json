@@ -12,10 +12,10 @@
     "free:ports": "node scripts/free-port.mjs 3001 5173 5174",
     "shared:build": "pnpm --dir packages/shared build",
     "dev:api": "node scripts/free-port.mjs 3001 && pnpm --dir packages/shared build && pnpm --dir apps/api start:dev",
-    "dev:web": "node scripts/free-port.mjs 5173 && pnpm --dir packages/shared build && pnpm --dir wabao-prototype dev",
+    "dev:web": "node scripts/free-port.mjs 5173 && pnpm --dir packages/shared build && pnpm --dir apps/web dev",
     "test": "pnpm --dir apps/api test",
     "test:e2e": "pnpm --dir apps/api test:e2e",
-    "build": "pnpm --dir packages/shared build && pnpm --dir apps/api build && pnpm --dir wabao-prototype build"
+    "build": "pnpm --dir packages/shared build && pnpm --dir apps/api build && pnpm --dir apps/web build"
   },
   "engines": {
     "node": ">=20"

@@ -1,15 +1,15 @@
 # 蛙宝 AI 工作台（WaBao AI Workspace）
 
-> 文、图、声一体的多模态 AI 工作台 · P1 文本阶段全栈实现（React + NestJS + PostgreSQL，SSE 流式对话、模板创作、内容审核、JWT 鉴权）
+> 文、图、声一体的多模态 AI 工作台 · P1 文本阶段全栈实现（Next.js + NestJS + PostgreSQL，SSE 流式对话、模板创作、内容审核、JWT 鉴权）
 
 <p>
-  <img alt="stack" src="https://img.shields.io/badge/frontend-React%2019%20%2B%20Vite-61dafb">
+  <img alt="stack" src="https://img.shields.io/badge/frontend-Next.js%2015%20%2B%20SWR-000000">
   <img alt="stack" src="https://img.shields.io/badge/backend-NestJS%20%2B%20Prisma-e0234e">
   <img alt="db" src="https://img.shields.io/badge/db-PostgreSQL%2016-336791">
   <img alt="ai" src="https://img.shields.io/badge/AI-OpenAI%20%7C%20mock-412991">
 </p>
 
-**仓库名**：`wabao-ai-workspace` · **Topics**：`ai` `llm` `openai` `nestjs` `react` `typescript` `prisma` `postgresql` `sse` `fullstack` `multimodal`
+**仓库名**：`wabao-ai-workspace` · **Topics**：`ai` `llm` `openai` `nestjs` `nextjs` `react` `swr` `typescript` `prisma` `postgresql` `sse` `fullstack` `multimodal`
 
 本仓库汇总了「蛙宝 AI 工作台」项目的**全部内容**：产品/设计/架构文档 + 可运行的前端原型 + NestJS 后端 + 一键启动脚本。
 
@@ -23,13 +23,14 @@ wabao-ai/
 │   ├── 2026-07-21-16_15-P1-文本阶段-原型与接口设计.md
 │   └── 2026-07-21-16_15-技术架构决策-前后端与选型.md
 ├── apps/
-│   └── api/                  # P1 后端 API（NestJS + TS + Prisma + PostgreSQL）
-├── packages/
-│   └── shared/               # 前后端共享契约（@wabao/shared：模型 / 会员套餐 / 常量）
-└── wabao-prototype/          # P1 高保真交互原型（React 19 + TS + Tailwind）
+│   ├── api/                  # P1 后端 API（NestJS + TS + Prisma + PostgreSQL）
+│   └── web/                  # P1 前端（Next.js 15 App Router + SWR + Tailwind v4）
+└── packages/
+    └── shared/               # 前后端共享契约（@wabao/shared：模型 / 会员套餐 / 常量）
 ```
 
-> 采用 pnpm workspace：根目录 `pnpm install` 一次性安装 `apps/*`、`packages/*`、`wabao-prototype`；`@wabao/shared` 为前后端唯一契约来源，避免常量漂移。
+> 采用 pnpm workspace：根目录 `pnpm install` 一次性安装 `apps/*`、`packages/*`；`@wabao/shared` 为前后端唯一契约来源，避免常量漂移。
+> 前端服务端状态统一由 **SWR** 管理（`apps/web/lib/hooks.ts`），SSE 流式增量直接写入 SWR 缓存。
 
 ## 文档索引
 
@@ -80,11 +81,12 @@ pnpm dev:web     # 前端 http://localhost:5173
 - 各应用的密钥/连接串放在 **`.env`**（已被 `.gitignore` 忽略，不会上传），克隆后由 `pnpm setup` 从 `.env.example` 自动生成。
 - 想接真实大模型：在 `apps/api/.env` 填 `OPENAI_API_KEY`（留空则自动走 mock，链路照样通）。
 - 生产环境请务必修改 `apps/api/.env` 里的 `JWT_ACCESS_SECRET` / `JWT_REFRESH_SECRET`。
+- 前端 `apps/web/.env` 用 `API_INTERNAL_URL` 指向后端（仅服务端可见）；浏览器统一走同源 `/bff` 代理，登录令牌存于 **httpOnly cookie**，JS 不可读，`/app/*` 由中间件 + 服务端组件双重守卫。
 
 ## 产品概要
 
 - **定位**：文、图、声一体的多模态 AI 工作台。
 - **落地节奏**：P1 文本 → P2 图像 → P3 语音 → P4 深化。
-- **技术栈**：前端 React 19 + TS + Tailwind；后端 NestJS（TS）；pnpm monorepo。
+- **技术栈**：前端 Next.js 15（App Router）+ SWR + TS + Tailwind v4；后端 NestJS（TS）；pnpm monorepo。
 
 > 文档命名约定：`issue/` 下按 `YYYY-MM-DD-HH_MM-<文件名>.md` 归档。

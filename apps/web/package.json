@@ -1,0 +1,28 @@
+{
+  "name": "@wabao/web",
+  "version": "0.1.0",
+  "private": true,
+  "description": "蛙宝 AI 工作台 · P1 前端（Next.js App Router + SWR + Tailwind v4）",
+  "scripts": {
+    "dev": "next dev -p 5173",
+    "build": "next build",
+    "start": "next start -p 5173",
+    "lint": "next lint",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@wabao/shared": "workspace:*",
+    "next": "^15.4.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "swr": "^2.3.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.1.0",
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "tailwindcss": "^4.1.0",
+    "typescript": "~5.8.0"
+  }
+}

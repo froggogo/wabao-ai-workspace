@@ -14,7 +14,7 @@ import { dirname, join } from 'node:path';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const api = join(root, 'apps', 'api');
-const web = join(root, 'wabao-prototype');
+const web = join(root, 'apps', 'web');
 
 const log = (m) => console.log(`\n\x1b[36m▶ ${m}\x1b[0m`);
 const ok = (m) => console.log(`\x1b[32m✓ ${m}\x1b[0m`);
