@@ -432,6 +432,8 @@ export class ConversationsService {
       content: m.content,
       model: m.model,
       flagged: m.flagged,
+      // 多模态附件（图片 URL 数组），看图问答的消息会带此字段
+      attachments: Array.isArray(m.attachments) ? (m.attachments as string[]) : null,
       finish_reason: m.finishReason,
       usage: { input_tokens: m.inputTokens, output_tokens: m.outputTokens },
       parent_id: m.parentId,

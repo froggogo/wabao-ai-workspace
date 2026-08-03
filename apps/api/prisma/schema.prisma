@@ -31,6 +31,8 @@ enum FeedbackRating {
 enum UsageFeature {
   chat
   studio
+  image
+  vision
 }
 
 enum ModerationRefType {
@@ -41,6 +43,19 @@ enum ModerationRefType {
 enum ModerationAction {
   block
   warn
+}
+
+// 媒体资产类型（P2 图像；P4 预留 video）
+enum MediaType {
+  image
+  video
+}
+
+// 媒体来源：generation=AI 生成，variation=变体重绘，upload=用户上传（供图像理解）
+enum MediaSource {
+  generation
+  variation
+  upload
 }
 
 model User {
@@ -59,6 +74,7 @@ model User {
   creations     Creation[]
   usageRecords  UsageRecord[]
   refreshTokens RefreshToken[]
+  mediaAssets   MediaAsset[]
 
   @@map("users")
 }
@@ -127,6 +143,8 @@ model Message {
   finishReason   String?     @map("finish_reason")
   flagged        Boolean     @default(false)
   parentId       String?     @map("parent_id") // 重生成链
+  // 多模态附件（P2）：图片 URL 数组，供 Vision 看图问答。形如 ["/uploads/xxx.png"]
+  attachments    Json?
   createdAt      DateTime    @default(now()) @map("created_at")
 
   conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
@@ -217,4 +235,39 @@ model ModerationRecord {
 
   @@index([userId])
   @@map("moderation_records")
+}
+
+/// M5 图像与多模态：AI 生成图片、变体、以及用户上传的图片统一存为媒体资产。
+/// 仅存储引用（url），文件本体落在本地 uploads/ 或对象存储。
+model MediaAsset {
+  id           String      @id @default(cuid())
+  userId       String      @map("user_id")
+  type         MediaType   @default(image)
+  source       MediaSource @default(generation)
+  /// 可公开访问的相对路径，如 /uploads/img_xxx.png
+  url          String
+  /// 用户原始 prompt（上传类为空）
+  prompt       String      @default("")
+  /// 实际送给模型的完整 prompt（含风格提示词），便于复现
+  revisedPrompt String?    @map("revised_prompt")
+  model        String      @default("")
+  size         String      @default("")
+  style        String      @default("")
+  width        Int         @default(0)
+  height       Int         @default(0)
+  bytes        Int         @default(0)
+  mimeType     String      @default("image/png") @map("mime_type")
+  /// 变体来源资产 id，形成重绘链
+  sourceId     String?     @map("source_id")
+  flagged      Boolean     @default(false)
+  cost         Float       @default(0)
+  createdAt    DateTime    @default(now()) @map("created_at")
+
+  user     User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  source_  MediaAsset?  @relation("MediaVariations", fields: [sourceId], references: [id], onDelete: SetNull)
+  variations MediaAsset[] @relation("MediaVariations")
+
+  @@index([userId])
+  @@index([createdAt])
+  @@map("media_assets")
 }

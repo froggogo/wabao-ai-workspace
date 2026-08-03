@@ -6,7 +6,7 @@ import { useSWRConfig } from "swr";
 import { api } from "@/lib/api";
 import { MODELS, PLAN_ALLOWED_MODELS } from "@/lib/mockData";
 import { swrKeys } from "@/lib/swr-keys";
-import { useAssistants, useConversation, useConversations, useUser } from "@/lib/hooks";
+import { useAssistants, useConversation, useConversations, useImageOptions, useUser } from "@/lib/hooks";
 import { Markdown } from "@/components/Markdown";
 import type { ChatMessage, Conversation, ModelId, ReasoningEffort } from "@/lib/types";
 
@@ -18,14 +18,16 @@ const REASONING_OPTIONS: { id: ReasoningEffort; label: string }[] = [
   { id: "medium", label: "均衡" },
   { id: "high", label: "深度" },
 ];
-
 export function ChatView({ conversationId }: { conversationId?: string }) {
   const router = useRouter();
   const { mutate: globalMutate } = useSWRConfig();
   const { conversations, mutate: mutateList } = useConversations();
   const { assistants } = useAssistants();
   const { user } = useUser();
+  const { options: imageOptions } = useImageOptions();
   const userPlan = user?.plan ?? "free";
+  // 看图问答属进阶权益，免费版仅展示升级引导
+  const canVision = imageOptions?.limits.vision ?? false;
 
   // 无会话 id 时自动跳到第一个会话
   useEffect(() => {
@@ -44,6 +46,11 @@ export function ChatView({ conversationId }: { conversationId?: string }) {
   const currentAiRef = useRef<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [showSettings, setShowSettings] = useState(true);
+  // 多模态附件（图片 URL），发送后随消息一起走 Vision 看图问答
+  const [attachments, setAttachments] = useState<string[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState("");
+  const fileRef = useRef<HTMLInputElement>(null);
 
   const grouped = useMemo(() => groupConversations(conversations, query), [conversations, query]);
 
@@ -124,19 +131,55 @@ export function ChatView({ conversationId }: { conversationId?: string }) {
     api.messages.feedback(msgId, rating).catch(() => undefined);
   };
 
+  // ---------------- 附件（图像理解） ----------------
+
+  const pickFiles = () => fileRef.current?.click();
+
+  const onFilesSelected = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    setUploadError("");
+    setUploading(true);
+    try {
+      // 逐个上传，成功的立即进入待发送附件列表
+      for (const file of Array.from(files).slice(0, 4)) {
+        const asset = await api.images.upload(file);
+        setAttachments((prev) => [...prev, asset.url]);
+      }
+    } catch (err) {
+      setUploadError(err instanceof Error ? err.message : "图片上传失败");
+    } finally {
+      setUploading(false);
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  };
+
+  const removeAttachment = (url: string) =>
+    setAttachments((prev) => prev.filter((u) => u !== url));
+
   // ---------------- 发送 / 停止 / 重新生成 ----------------
 
   const send = async () => {
     const text = input.trim();
-    if (!text || streaming || !active) return;
+    if ((!text && attachments.length === 0) || streaming || !active) return;
     const convId = active.id;
     const model = active.model;
+    const imgs = attachments;
+    // 带图时走 Vision 看图问答；没写问题则给一个默认提问
+    const isVision = imgs.length > 0;
+    const question = text || (isVision ? "请描述并解读这张图片" : "");
     setInput("");
+    setAttachments([]);
 
     const isFirstUserMsg = active.messages.filter((m) => m.role === "user").length === 0;
-    addMessage({ id: genId("m"), role: "user", content: text, createdAt: Date.now() });
+    addMessage({
+      id: genId("m"),
+      role: "user",
+      content: question,
+      attachments: isVision ? imgs : undefined,
+      createdAt: Date.now(),
+    });
     if (isFirstUserMsg) {
-      const title = text.slice(0, 18);
+      const title = question.slice(0, 18);
       patchActive({ title });
       patchList(convId, { title });
     }
@@ -156,38 +199,56 @@ export function ChatView({ conversationId }: { conversationId?: string }) {
     const ac = new AbortController();
     abortRef.current = ac;
     let acc = "";
+
+    const handlers = {
+      signal: ac.signal,
+      onStart: (id: string) => {
+        if (!id) return;
+        replaceMessageId(currentAiRef.current!, id);
+        currentAiRef.current = id;
+      },
+      onDelta: (t: string) => {
+        acc += t;
+        updateMessage(currentAiRef.current!, { content: acc });
+      },
+      onDone: (data: {
+        flagged?: boolean;
+        filtered_content?: string;
+        message_id?: string;
+      }) => {
+        // 看图问答的真实消息 id 在 done 事件中返回（start 时尚未落库），
+        // 这里同步过来，保证后续重新生成 / 评分等操作作用于正确的消息。
+        if (data.message_id && currentAiRef.current !== data.message_id) {
+          replaceMessageId(currentAiRef.current!, data.message_id);
+          currentAiRef.current = data.message_id;
+        }
+        if (data.flagged) {
+          updateMessage(currentAiRef.current!, {
+            content: data.filtered_content ?? "⚠️ 该回复包含不符合规范的内容，已被拦截。",
+            flagged: true,
+            streaming: false,
+          });
+        }
+      },
+      onError: (err: { message: string }) => {
+        updateMessage(currentAiRef.current!, {
+          content: `⚠️ ${err.message}`,
+          flagged: true,
+          streaming: false,
+        });
+      },
+    };
+
     try {
-      await api.messages.send(
-        convId,
-        { content: text, model },
-        {
-          signal: ac.signal,
-          onStart: (id) => {
-            replaceMessageId(currentAiRef.current!, id);
-            currentAiRef.current = id;
-          },
-          onDelta: (t) => {
-            acc += t;
-            updateMessage(currentAiRef.current!, { content: acc });
-          },
-          onDone: (data) => {
-            if (data.flagged) {
-              updateMessage(currentAiRef.current!, {
-                content: data.filtered_content ?? "⚠️ 该回复包含不符合规范的内容，已被拦截。",
-                flagged: true,
-                streaming: false,
-              });
-            }
-          },
-          onError: (err) => {
-            updateMessage(currentAiRef.current!, {
-              content: `⚠️ ${err.message}`,
-              flagged: true,
-              streaming: false,
-            });
-          },
-        },
-      );
+      if (isVision) {
+        // 传入会话 id，让后端把带图提问与回复一并落库，刷新后可回看
+        await api.images.analyze(
+          { imageUrls: imgs, question, conversationId: convId },
+          handlers,
+        );
+      } else {
+        await api.messages.send(convId, { content: question, model }, handlers);
+      }
     } finally {
       if (currentAiRef.current) updateMessage(currentAiRef.current, { streaming: false });
       setStreaming(false);
@@ -311,6 +372,31 @@ export function ChatView({ conversationId }: { conversationId?: string }) {
                   {m.role === "user" ? (
                     <div className="flex justify-end">
                       <div className="max-w-[75%] rounded-2xl rounded-br-md bg-brand-600 px-4 py-2.5 text-[15px] text-white shadow-sm">
+                        {m.attachments && m.attachments.length > 0 && (
+                          <div
+                            className={`mb-2 grid gap-1.5 ${
+                              m.attachments.length > 1 ? "grid-cols-2" : "grid-cols-1"
+                            }`}
+                          >
+                            {m.attachments.map((url) => (
+                              <a
+                                key={url}
+                                href={url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="block overflow-hidden rounded-xl ring-1 ring-white/25"
+                              >
+                                {/* eslint-disable-next-line @next/next/no-img-element */}
+                                <img
+                                  src={url}
+                                  alt="上传的图片"
+                                  loading="lazy"
+                                  className="max-h-48 w-full object-cover"
+                                />
+                              </a>
+                            ))}
+                          </div>
+                        )}
                         {m.content}
                       </div>
                     </div>
@@ -365,7 +451,67 @@ export function ChatView({ conversationId }: { conversationId?: string }) {
 
             {/* 输入框 */}
             <div className="border-t border-slate-200 bg-white px-4 py-3 md:px-10">
+              {/* 待发送附件预览 */}
+              {(attachments.length > 0 || uploading || uploadError) && (
+                <div className="mx-auto mb-2 flex max-w-3xl flex-wrap items-center gap-2">
+                  {attachments.map((url) => (
+                    <div
+                      key={url}
+                      className="group relative h-16 w-16 overflow-hidden rounded-xl ring-1 ring-slate-200"
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={url} alt="附件" className="h-full w-full object-cover" />
+                      <button
+                        onClick={() => removeAttachment(url)}
+                        title="移除"
+                        className="absolute right-0.5 top-0.5 flex h-5 w-5 items-center justify-center rounded-full bg-slate-900/70 text-[10px] text-white opacity-0 transition group-hover:opacity-100"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  ))}
+                  {uploading && (
+                    <div className="flex h-16 w-16 animate-pulse items-center justify-center rounded-xl bg-slate-100 text-xs text-slate-400">
+                      上传中
+                    </div>
+                  )}
+                  {uploadError && (
+                    <span className="text-xs text-red-500">⚠️ {uploadError}</span>
+                  )}
+                  {attachments.length > 0 && (
+                    <span className="text-[11px] text-slate-400">
+                      已附 {attachments.length} 张图，发送后将进行看图问答
+                    </span>
+                  )}
+                </div>
+              )}
+
               <div className="mx-auto flex max-w-3xl items-end gap-2 rounded-2xl border border-slate-200 bg-slate-50 p-2 focus-within:border-brand-400 focus-within:ring-2 focus-within:ring-brand-100">
+                <input
+                  ref={fileRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp,image/gif"
+                  multiple
+                  hidden
+                  onChange={(e) => onFilesSelected(e.target.files)}
+                />
+                <button
+                  onClick={() => (canVision ? pickFiles() : router.push("/app/pricing"))}
+                  disabled={streaming || uploading}
+                  title={
+                    canVision
+                      ? "上传图片提问（看图问答）"
+                      : "看图问答需升级套餐，点击查看"
+                  }
+                  className={`relative flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-lg transition hover:bg-slate-200 disabled:opacity-40 ${
+                    canVision ? "text-slate-400 hover:text-slate-600" : "text-slate-300"
+                  }`}
+                >
+                  🖼️
+                  {!canVision && (
+                    <span className="absolute -right-0.5 -top-0.5 text-[9px]">🔒</span>
+                  )}
+                </button>
                 <textarea
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
@@ -376,7 +522,11 @@ export function ChatView({ conversationId }: { conversationId?: string }) {
                     }
                   }}
                   rows={1}
-                  placeholder="输入消息，Enter 发送 / Shift+Enter 换行"
+                  placeholder={
+                    attachments.length > 0
+                      ? "问问这张图片…（留空则默认解读图片）"
+                      : "输入消息，Enter 发送 / Shift+Enter 换行"
+                  }
                   className="max-h-40 min-h-[24px] flex-1 resize-none bg-transparent px-2 py-1.5 text-[15px] outline-none"
                 />
                 {streaming ? (
@@ -389,7 +539,7 @@ export function ChatView({ conversationId }: { conversationId?: string }) {
                 ) : (
                   <button
                     onClick={send}
-                    disabled={!input.trim()}
+                    disabled={!input.trim() && attachments.length === 0}
                     className="rounded-xl bg-brand-600 px-4 py-2 text-sm font-medium text-white transition enabled:hover:bg-brand-700 disabled:opacity-40"
                   >
                     发送 ➤
@@ -397,7 +547,7 @@ export function ChatView({ conversationId }: { conversationId?: string }) {
                 )}
               </div>
               <div className="mx-auto mt-1.5 max-w-3xl text-center text-[11px] text-slate-300">
-                内容由 AI 生成，仅供参考 · 已接入真实后端（SSE 流式）
+                内容由 AI 生成，仅供参考 · 支持文字与图片输入（多模态）
               </div>
             </div>
           </>
@@ -585,7 +735,11 @@ function IconBtn({
 }
 
 function EmptyChat() {
-  const suggestions = ["帮我写一段本周周报", "解释一下什么是多模态 AI", "用 TypeScript 写一个求和函数"];
+  const suggestions = [
+    "帮我写一段本周周报",
+    "解释一下什么是多模态 AI",
+    "用 TypeScript 写一个求和函数",
+  ];
   return (
     <div className="flex h-full flex-col items-center justify-center text-center">
       <div className="text-5xl">✨</div>
@@ -601,10 +755,12 @@ function EmptyChat() {
           </span>
         ))}
       </div>
+      <div className="mt-4 rounded-xl bg-white/60 px-4 py-2 text-xs text-slate-400 ring-1 ring-slate-200">
+        🖼️ 也可以点击输入框左侧图标上传图片，让蛙宝看图回答
+      </div>
     </div>
   );
 }
-
 function groupConversations(list: Conversation[], q: string) {
   const filtered = list.filter((c) => c.title.toLowerCase().includes(q.toLowerCase()));
   const sorted = [...filtered].sort(

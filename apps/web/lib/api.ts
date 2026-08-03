@@ -2,23 +2,35 @@ import {
   mapAssistant,
   mapConversation,
   mapCreation,
+  mapImageOptions,
+  mapMediaAsset,
   mapModerationRecord,
   mapTemplate,
   type RawAssistant,
   type RawConversation,
   type RawCreation,
+  type RawImageOptions,
+  type RawMediaAsset,
   type RawModerationRecord,
   type RawTemplate,
 } from "./mappers";
 import type {
   Assistant,
+  CaptionOptions,
   Conversation,
   Creation,
+  ImageGenerateParams,
+  ImageOptions,
+  ImageQuotaSnapshot,
+  ImageSizeId,
+  MediaAsset,
+  MediaSourceKind,
   ModelId,
   ModerationRecord,
+  PlanId,
   ReasoningEffort,
   Template,
-  UsageBreakdown,
+  UsageResult,
 } from "./types";
 
 // 所有请求走同源 BFF（Next.js Route Handlers）。BFF 负责从 httpOnly cookie 取出
@@ -158,6 +170,122 @@ function dispatchEvent(raw: string, handlers: StreamHandlers): void {
   }
 }
 
+// ---------------- 图像 SSE 流式 ----------------
+
+export interface ImageStreamHandlers {
+  /** 任务开始：返回本次将生成的张数 */
+  onStart?: (info: { count: number; mock?: boolean }) => void;
+  /** 单张生成完成，可立即上屏 */
+  onItem?: (asset: MediaAsset) => void;
+  /** 全部完成，附带最新配额 */
+  onDone?: (info: { images: MediaAsset[]; quota?: ImageQuotaSnapshot }) => void;
+  onError?: (err: ApiError) => void;
+  signal?: AbortSignal;
+}
+
+/**
+ * 图像生成流：事件为 image.start / image.item / image.done / error。
+ * 与文本流复用同一套 SSE 解析逻辑，仅事件语义不同。
+ */
+async function imageStream(
+  path: string,
+  body: unknown,
+  handlers: ImageStreamHandlers,
+): Promise<void> {
+  const res = await fetch(`${BASE_URL}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+    body: JSON.stringify(body),
+    signal: handlers.signal,
+  });
+
+  if (!res.ok || !res.body) {
+    const text = await res.text().catch(() => "");
+    let code = "internal_error";
+    let message = `HTTP ${res.status}`;
+    let details: unknown;
+    try {
+      const json = JSON.parse(text);
+      code = json.error?.code ?? code;
+      message = json.error?.message ?? message;
+      details = json.error?.details;
+    } catch {
+      /* ignore */
+    }
+    handlers.onError?.(new ApiError(code, message, details));
+    return;
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  const handleFrame = (raw: string) => {
+    let event = "message";
+    let dataStr = "";
+    for (const line of raw.split("\n")) {
+      if (line.startsWith("event:")) event = line.slice(6).trim();
+      else if (line.startsWith("data:")) dataStr += line.slice(5).trim();
+    }
+    if (!dataStr) return;
+    let data: Record<string, unknown>;
+    try {
+      data = JSON.parse(dataStr);
+    } catch {
+      return;
+    }
+    switch (event) {
+      case "image.start":
+        handlers.onStart?.({
+          count: (data.count as number) ?? 1,
+          mock: data.mock as boolean | undefined,
+        });
+        break;
+      case "image.item":
+        handlers.onItem?.(mapMediaAsset(data as unknown as RawMediaAsset));
+        break;
+      case "image.done": {
+        const rawImages = (data.images as RawMediaAsset[]) ?? [];
+        const q = data.quota as
+          | { quota: number; used: number; remaining: number | null }
+          | undefined;
+        handlers.onDone?.({
+          images: rawImages.map(mapMediaAsset),
+          quota: q ? { quota: q.quota, used: q.used, remaining: q.remaining } : undefined,
+        });
+        break;
+      }
+      case "error":
+        handlers.onError?.(
+          new ApiError(
+            (data.code as string) ?? "error",
+            (data.message as string) ?? "生成失败",
+            data.details,
+          ),
+        );
+        break;
+    }
+  };
+
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let idx: number;
+      while ((idx = buffer.indexOf("\n\n")) !== -1) {
+        const raw = buffer.slice(0, idx);
+        buffer = buffer.slice(idx + 2);
+        handleFrame(raw);
+      }
+    }
+  } catch (e) {
+    if ((e as Error).name !== "AbortError") {
+      handlers.onError?.(new ApiError("stream_error", (e as Error).message));
+    }
+  }
+}
+
 // ---------------- 业务 API ----------------
 
 export interface AuthResult {
@@ -189,14 +317,7 @@ export const api = {
         body: input,
       }),
     usage: (period?: string) =>
-      request<{
-        period: string;
-        plan: string;
-        quota_tokens: number;
-        used_tokens: number;
-        remaining_tokens: number;
-        breakdown: UsageBreakdown[];
-      }>(`/usage${period ? `?period=${period}` : ""}`),
+      request<UsageResult>(`/usage${period ? `?period=${period}` : ""}`),
   },
 
   billing: {
@@ -324,5 +445,114 @@ export const api = {
       return (await request<RawCreation[]>("/creations")).map(mapCreation);
     },
     remove: (id: string) => request(`/creations/${id}`, { method: "DELETE" }),
+  },
+
+  images: {
+    /** 生图参数目录 + 当前套餐权益与余量 */
+    async options(): Promise<ImageOptions> {
+      return mapImageOptions(await request<RawImageOptions>("/images/options"));
+    },
+
+    /** 我的作品（默认仅生成与变体） */
+    async list(params?: {
+      page?: number;
+      pageSize?: number;
+      source?: MediaSourceKind;
+    }): Promise<MediaAsset[]> {
+      const q = new URLSearchParams();
+      if (params?.page) q.set("page", String(params.page));
+      if (params?.pageSize) q.set("page_size", String(params.pageSize));
+      if (params?.source) q.set("source", params.source);
+      const qs = q.toString();
+      const rows = await request<RawMediaAsset[]>(`/images${qs ? `?${qs}` : ""}`);
+      return rows.map(mapMediaAsset);
+    },
+
+    /** 文生图（SSE 流式，逐张回调） */
+    generate: (params: ImageGenerateParams, handlers: ImageStreamHandlers) =>
+      imageStream("/images/generations", { ...params, stream: true }, handlers),
+
+    /** 变体重绘 */
+    variation: (
+      id: string,
+      input: { prompt?: string; size?: ImageSizeId },
+      handlers: ImageStreamHandlers,
+    ) => imageStream(`/images/${id}/variations`, input, handlers),
+
+    remove: (id: string) => request(`/images/${id}`, { method: "DELETE" }),
+
+    /** 上传图片（multipart/form-data，供看图问答使用） */
+    async upload(file: File): Promise<MediaAsset> {
+      const form = new FormData();
+      form.append("file", file);
+      const res = await fetch(`${BASE_URL}/images/uploads`, { method: "POST", body: form });
+      const text = await res.text();
+      const json = text ? JSON.parse(text) : {};
+      if (!res.ok) {
+        const err = json.error ?? { code: "unknown", message: `HTTP ${res.status}` };
+        throw new ApiError(err.code, err.message, err.details);
+      }
+      return mapMediaAsset((json.data ?? json) as RawMediaAsset);
+    },
+
+    /** 看图问答（SSE 文本流，事件结构与对话一致）。传 conversationId 时后端会落库 */
+    analyze: (
+      input: { imageUrls: string[]; question: string; conversationId?: string },
+      handlers: StreamHandlers,
+    ) =>
+      stream(
+        "/images/analyses",
+        {
+          image_urls: input.imageUrls,
+          question: input.question,
+          ...(input.conversationId ? { conversation_id: input.conversationId } : {}),
+          stream: true,
+        },
+        handlers,
+      ),
+
+    /** 图 → 文案的用途与语气目录 */
+    async captionOptions(): Promise<CaptionOptions> {
+      const raw = await request<{
+        purposes: CaptionOptions["purposes"];
+        tones: CaptionOptions["tones"];
+        defaults: CaptionOptions["defaults"];
+        limits: { plan: PlanId; vision: boolean; max_images: number };
+        mock: boolean;
+      }>("/images/caption-options");
+      return {
+        purposes: raw.purposes,
+        tones: raw.tones,
+        defaults: raw.defaults,
+        limits: {
+          plan: raw.limits.plan,
+          vision: raw.limits.vision,
+          maxImages: raw.limits.max_images,
+        },
+        mock: raw.mock,
+      };
+    },
+
+    /** 图 → 文案（SSE 文本流） */
+    caption: (
+      input: {
+        imageUrls: string[];
+        purpose?: string;
+        tone?: string;
+        brief?: string;
+      },
+      handlers: StreamHandlers,
+    ) =>
+      stream(
+        "/images/captions",
+        {
+          image_urls: input.imageUrls,
+          ...(input.purpose ? { purpose: input.purpose } : {}),
+          ...(input.tone ? { tone: input.tone } : {}),
+          ...(input.brief ? { brief: input.brief } : {}),
+          stream: true,
+        },
+        handlers,
+      ),
   },
 };

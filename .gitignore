@@ -41,3 +41,7 @@ wabao-prototype/dist/
 
 # ===== 其它本地文件 =====
 *.local
+
+# ===== 媒体上传（P2 图像：本地生成/上传的图片，不入库） =====
+uploads/
+apps/api/uploads/

@@ -6,6 +6,9 @@ import type {
   ChatMessage,
   Conversation,
   Creation,
+  ImageOptions,
+  MediaAsset,
+  MediaSourceKind,
   ModelId,
   ModerationRecord,
   ReasoningEffort,
@@ -18,6 +21,7 @@ export interface RawMessage {
   content: string;
   model?: ModelId;
   flagged?: boolean;
+  attachments?: string[] | null;
   created_at?: string;
 }
 
@@ -28,6 +32,7 @@ export function mapMessage(m: RawMessage): ChatMessage {
     content: m.content,
     model: m.model,
     flagged: m.flagged,
+    attachments: Array.isArray(m.attachments) ? m.attachments : undefined,
     createdAt: m.created_at ? Date.parse(m.created_at) : Date.now(),
   };
 }
@@ -135,5 +140,79 @@ export function mapModerationRecord(r: RawModerationRecord): ModerationRecord {
     categories: Array.isArray(r.categories) ? r.categories : [],
     action: r.action,
     createdAt: Date.parse(r.created_at),
+  };
+}
+
+// ---------------- 图像与多模态（P2 · M5） ----------------
+
+export interface RawMediaAsset {
+  id: string;
+  source: MediaSourceKind;
+  url: string;
+  prompt: string;
+  revised_prompt?: string | null;
+  model: string;
+  size: string;
+  style: string;
+  width: number;
+  height: number;
+  bytes: number;
+  mime_type: string;
+  source_id?: string | null;
+  flagged: boolean;
+  created_at: string;
+}
+
+export function mapMediaAsset(a: RawMediaAsset): MediaAsset {
+  return {
+    id: a.id,
+    source: a.source,
+    url: a.url,
+    prompt: a.prompt,
+    revisedPrompt: a.revised_prompt,
+    model: a.model,
+    size: a.size,
+    style: a.style,
+    width: a.width,
+    height: a.height,
+    bytes: a.bytes,
+    mimeType: a.mime_type,
+    sourceId: a.source_id,
+    flagged: a.flagged,
+    createdAt: Date.parse(a.created_at),
+  };
+}
+
+export interface RawImageOptions {
+  models: ImageOptions["models"];
+  sizes: ImageOptions["sizes"];
+  styles: ImageOptions["styles"];
+  defaults: ImageOptions["defaults"];
+  limits: {
+    plan: ImageOptions["limits"]["plan"];
+    monthly_images: number;
+    used_images: number;
+    remaining_images: number | null;
+    max_batch: number;
+    vision: boolean;
+  };
+  mock: boolean;
+}
+
+export function mapImageOptions(o: RawImageOptions): ImageOptions {
+  return {
+    models: o.models,
+    sizes: o.sizes,
+    styles: o.styles,
+    defaults: o.defaults,
+    limits: {
+      plan: o.limits.plan,
+      monthlyImages: o.limits.monthly_images,
+      usedImages: o.limits.used_images,
+      remainingImages: o.limits.remaining_images,
+      maxBatch: o.limits.max_batch,
+      vision: o.limits.vision,
+    },
+    mock: o.mock,
   };
 }

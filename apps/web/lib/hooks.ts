@@ -132,3 +132,29 @@ export function useModerationRecords(onlyFlagged: boolean) {
   );
   return { records: data, error, isLoading };
 }
+
+// ---------------- 图像与多模态（P2 · M5） ----------------
+
+/** 生图参数目录（模型/尺寸/风格 + 当前套餐权益与余量） */
+export function useImageOptions() {
+  const { data, error, isLoading, mutate } = useSWR(swrKeys.imageOptions, () =>
+    api.images.options(),
+  );
+  return { options: data, error, isLoading, mutate };
+}
+
+/** 我的作品（AI 生成图与变体） */
+export function useMediaAssets() {
+  const { data, error, isLoading, mutate } = useSWR(swrKeys.images, () =>
+    api.images.list({ pageSize: 60 }),
+  );
+  return { assets: data ?? [], error, isLoading, mutate };
+}
+
+/** 图 → 文案的用途与语气目录 */
+export function useCaptionOptions() {
+  const { data, error, isLoading } = useSWR(swrKeys.captionOptions, () =>
+    api.images.captionOptions(),
+  );
+  return { options: data, error, isLoading };
+}

@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { imageLimitsForPlan, PlanId } from '@wabao/shared';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AppException } from '../../common/errors';
 import { UpdateMeDto } from './dto/users.dto';
@@ -49,7 +50,12 @@ export class UsersService {
       _count: { _all: true },
     });
 
-    const featureLabel: Record<string, string> = { chat: '对话', studio: '创作' };
+    const featureLabel: Record<string, string> = {
+      chat: '对话',
+      studio: '创作',
+      image: 'AI 绘图',
+      vision: '看图问答',
+    };
     let usedTokens = 0;
     const breakdown = records.map((r) => {
       const tokens = (r._sum.inputTokens ?? 0) + (r._sum.outputTokens ?? 0);
@@ -63,6 +69,16 @@ export class UsersService {
       };
     });
 
+    // 图像按「张数/月」独立计量（与 Token 配额并列展示）
+    const imageLimits = imageLimitsForPlan(user.plan as unknown as PlanId);
+    const usedImages = await this.prisma.mediaAsset.count({
+      where: {
+        userId,
+        source: { in: ['generation', 'variation'] },
+        createdAt: { gte: start, lt: end },
+      },
+    });
+
     return {
       period: label,
       plan: user.plan,
@@ -70,6 +86,15 @@ export class UsersService {
       used_tokens: usedTokens,
       remaining_tokens: Math.max(0, user.quotaTokens - usedTokens),
       breakdown,
+      images: {
+        quota: imageLimits.monthlyImages,
+        used: usedImages,
+        remaining:
+          imageLimits.monthlyImages === 0
+            ? null
+            : Math.max(0, imageLimits.monthlyImages - usedImages),
+        vision: imageLimits.vision,
+      },
     };
   }
 

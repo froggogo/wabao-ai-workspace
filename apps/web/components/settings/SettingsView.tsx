@@ -23,6 +23,12 @@ export function SettingsView() {
   const pct = quotaTokens ? Math.round((usedTokens / quotaTokens) * 100) : 0;
   const near = pct >= 80;
 
+  // 图像额度（张数）独立于 Token 计量
+  const images = usage?.images;
+  const imagePct =
+    images && images.quota > 0 ? Math.round((images.used / images.quota) * 100) : 0;
+  const imageNear = images != null && images.remaining !== null && imagePct >= 80;
+
   return (
     <div className="h-full overflow-y-auto">
       <div className="mx-auto max-w-3xl px-6 py-8">
@@ -76,6 +82,44 @@ export function SettingsView() {
                   </div>
                 )}
               </div>
+
+              {/* AI 绘图额度按「张数」独立计量（P2 图像阶段） */}
+              {images && (
+                <div className="mt-5 border-t border-slate-100 pt-4">
+                  <div className="mb-1.5 flex justify-between text-sm">
+                    <span className="flex items-center gap-1.5 text-slate-500">
+                      🎨 本月 AI 绘图
+                      {images.vision && (
+                        <span className="rounded bg-brand-50 px-1.5 py-0.5 text-[10px] text-brand-600">
+                          含看图问答
+                        </span>
+                      )}
+                    </span>
+                    <span
+                      className={imageNear ? "font-medium text-amber-600" : "text-slate-600"}
+                    >
+                      {images.remaining === null
+                        ? `${images.used.toLocaleString()} 张 · 不限量`
+                        : `${images.used} / ${images.quota} 张`}
+                    </span>
+                  </div>
+                  {images.remaining !== null && images.quota > 0 && (
+                    <div className="h-2.5 w-full overflow-hidden rounded-full bg-slate-100">
+                      <div
+                        className={`h-full rounded-full ${
+                          imageNear ? "bg-amber-500" : "bg-gradient-to-r from-brand-400 to-indigo-500"
+                        }`}
+                        style={{ width: `${Math.min(100, imagePct)}%` }}
+                      />
+                    </div>
+                  )}
+                  {imageNear && (
+                    <div className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">
+                      ⚠️ 绘图额度已用 {imagePct}%，用尽后将无法继续生成图片
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">

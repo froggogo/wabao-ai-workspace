@@ -39,6 +39,42 @@ export const PLAN_MATRIX: PlanMatrixRow[] = [
     values: { free: "标准", plus: "高峰期优先", pro: "最高优先级", team: "高", enterprise: "专属限流" },
   },
   {
+    group: "图像与多模态",
+    label: "每月 AI 绘图张数",
+    values: { free: "20 张", plus: "500 张", pro: "5000 张", team: "2000 张/团队", enterprise: "不限量" },
+  },
+  {
+    group: "图像与多模态",
+    label: "单次批量出图",
+    values: { free: "1 张", plus: "4 张", pro: "4 张", team: "4 张", enterprise: "定制" },
+  },
+  {
+    group: "图像与多模态",
+    label: "可用生图模型",
+    values: {
+      free: "Image 2 Mini",
+      plus: "全部（含 Image 2）",
+      pro: "全部（含 Image 2）",
+      team: "全部",
+      enterprise: "全部 + 专属容量",
+    },
+  },
+  {
+    group: "图像与多模态",
+    label: "画面风格",
+    values: { free: "基础 4 种", plus: "全部 8 种", pro: "全部 8 种", team: "全部 8 种", enterprise: "全部 + 定制" },
+  },
+  {
+    group: "图像与多模态",
+    label: "图像理解（看图问答）",
+    values: { free: false, plus: true, pro: true, team: true, enterprise: true },
+  },
+  {
+    group: "图像与多模态",
+    label: "变体重绘",
+    values: { free: false, plus: true, pro: true, team: true, enterprise: true },
+  },
+  {
     group: "功能能力",
     label: "内容创作模板",
     values: { free: "基础模板", plus: "全部模板", pro: "全部模板", team: "全部模板", enterprise: "全部 + 定制" },
