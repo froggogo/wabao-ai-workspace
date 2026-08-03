@@ -12,7 +12,13 @@ export const runtime = "nodejs";
 
 type Ctx = { params: Promise<{ path: string[] }> };
 
-const RESPONSE_HEADER_ALLOWLIST = ["content-type", "cache-control", "x-quota-remaining"];
+const RESPONSE_HEADER_ALLOWLIST = [
+  "content-type",
+  "cache-control",
+  "content-disposition",
+  "content-length",
+  "x-quota-remaining",
+];
 
 async function proxy(req: NextRequest, ctx: Ctx): Promise<Response> {
   const { path } = await ctx.params;
@@ -20,23 +26,35 @@ async function proxy(req: NextRequest, ctx: Ctx): Promise<Response> {
 
   const method = req.method.toUpperCase();
   const hasBody = method !== "GET" && method !== "HEAD";
-  const body = hasBody ? await req.text() : undefined;
+  const contentType = req.headers.get("content-type") ?? "";
+  // multipart（图片上传）必须透传原始字节，不能按文本解析，否则会破坏 boundary
+  const isBinary = hasBody && !contentType.includes("application/json") && contentType !== "";
+  const rawBody = hasBody
+    ? isBinary
+      ? await req.arrayBuffer()
+      : await req.text()
+    : undefined;
 
   const forwardHeaders = (access: string | undefined): HeadersInit => {
     const h: Record<string, string> = {};
-    const ct = req.headers.get("content-type");
     const accept = req.headers.get("accept");
-    if (ct) h["content-type"] = ct;
+    if (contentType) h["content-type"] = contentType;
     if (accept) h["accept"] = accept;
     if (access) h["authorization"] = `Bearer ${access}`;
     return h;
+  };
+
+  const bodyFor = (): BodyInit | undefined => {
+    if (rawBody === undefined) return undefined;
+    if (typeof rawBody === "string") return rawBody.length > 0 ? rawBody : undefined;
+    return rawBody.byteLength > 0 ? rawBody : undefined;
   };
 
   const call = (access: string | undefined) =>
     fetch(target, {
       method,
       headers: forwardHeaders(access),
-      body: body && body.length > 0 ? body : undefined,
+      body: bodyFor(),
       cache: "no-store",
     });
 

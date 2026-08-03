@@ -4,11 +4,15 @@ import {
   mapAssistant,
   mapConversation,
   mapCreation,
+  mapImageOptions,
+  mapMediaAsset,
   mapModerationRecord,
   mapTemplate,
   type RawAssistant,
   type RawConversation,
   type RawCreation,
+  type RawImageOptions,
+  type RawMediaAsset,
   type RawModerationRecord,
   type RawTemplate,
 } from "../mappers";
@@ -16,6 +20,8 @@ import type {
   Assistant,
   Conversation,
   Creation,
+  ImageOptions,
+  MediaAsset,
   ModerationRecord,
   PlanId,
   Template,
@@ -97,4 +103,16 @@ export async function getServerModerationRecords(onlyFlagged: boolean): Promise<
   const qs = onlyFlagged ? "?flagged=true" : "";
   const rows = await serverFetch<RawModerationRecord[]>(`/admin/moderation-records${qs}`);
   return (rows ?? []).map(mapModerationRecord);
+}
+
+// ---------------- 图像与多模态（P2 · M5） ----------------
+
+export async function getServerImageOptions(): Promise<ImageOptions | undefined> {
+  const raw = await serverFetch<RawImageOptions>("/images/options");
+  return raw ? mapImageOptions(raw) : undefined;
+}
+
+export async function getServerMediaAssets(): Promise<MediaAsset[]> {
+  const rows = await serverFetch<RawMediaAsset[]>("/images?page=1&page_size=60");
+  return (rows ?? []).map(mapMediaAsset);
 }

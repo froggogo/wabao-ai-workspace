@@ -8,6 +8,7 @@ import { PLAN_LABELS } from "@/lib/mockData";
 const NAV = [
   { to: "/app/chat", label: "对话", icon: "💬" },
   { to: "/app/studio", label: "创作", icon: "✨" },
+  { to: "/app/images", label: "绘图", icon: "🎨" },
   { to: "/app/assistants", label: "助手", icon: "🎭" },
   { to: "/app/pricing", label: "会员", icon: "👑" },
   { to: "/app/settings", label: "设置", icon: "⚙️" },
@@ -27,7 +28,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex h-full w-full bg-slate-50">
       {/* 全局左侧导航 */}
-      <aside className="flex w-[68px] shrink-0 flex-col items-center justify-between bg-gradient-to-b from-brand-700 to-brand-900 py-4 text-white">
+      <aside className="flex w-[68px] shrink-0 flex-col items-center justify-between overflow-y-auto bg-gradient-to-b from-brand-700 to-brand-900 py-4 text-white">
         <div className="flex flex-col items-center gap-6">
           <div className="text-2xl" title="蛙宝 AI">
             ✨

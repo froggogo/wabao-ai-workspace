@@ -15,6 +15,7 @@ import { AssistantsModule } from './modules/assistants/assistants.module';
 import { ConversationsModule } from './modules/conversations/conversations.module';
 import { CreationsModule } from './modules/creations/creations.module';
 import { BillingModule } from './modules/billing/billing.module';
+import { ImagesModule } from './modules/images/images.module';
 import { HealthController } from './health.controller';
 
 @Module({
@@ -35,6 +36,7 @@ import { HealthController } from './health.controller';
     ConversationsModule,
     CreationsModule,
     BillingModule,
+    ImagesModule,
   ],
   controllers: [HealthController],
   providers: [{ provide: APP_GUARD, useClass: AppThrottlerGuard }],

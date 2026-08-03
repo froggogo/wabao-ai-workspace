@@ -11,4 +11,8 @@ export const swrKeys = {
   usage: (period?: string) => `usage:${period ?? "current"}`,
   subscription: "subscription" as const,
   moderation: (onlyFlagged: boolean) => `moderation:${onlyFlagged}`,
+  // 图像与多模态（P2）
+  imageOptions: "images:options" as const,
+  images: "images:list" as const,
+  captionOptions: "images:caption-options" as const,
 };
