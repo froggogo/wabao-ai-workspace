@@ -25,6 +25,7 @@ wabao-ai/
 │   └── 2026-07-21-16_15-技术架构决策-前后端与选型.md
 ├── apps/
 │   ├── api/                  # P1 后端 API（NestJS + TS + Prisma + PostgreSQL）
+│   │   └── prisma/migrations # 数据库迁移历史（唯一建表来源）
 │   └── web/                  # P1 前端（Next.js 15 App Router + SWR + Tailwind v4）
 └── packages/
     └── shared/               # 前后端共享契约（@wabao/shared：模型 / 会员套餐 / 常量）
@@ -73,7 +74,9 @@ pnpm dev:web     # 前端 http://localhost:5173
 | `pnpm setup` | 一键初始化（env + 依赖 + 数据库） |
 | `pnpm dev:api` / `pnpm dev:web` | 启动后端 / 前端 |
 | `pnpm db:up` / `pnpm db:down` | 启动 / 停止数据库容器 |
-| `pnpm db:init` | 建表 + 注入模板（Docker 已在运行时） |
+| `pnpm db:init` | 应用迁移 + 注入模板（Docker 已在运行时） |
+| `pnpm db:status` | 查看迁移应用状态 |
+| `pnpm db:baseline` | 已有库首次接入迁移体系时标记基线（见 apps/api/README） |
 | `pnpm db:studio` | 打开 Prisma Studio 可视化查看数据库 |
 | `pnpm test` / `pnpm test:e2e` | 后端单元 / 端到端测试 |
 | `pnpm build` | 构建前后端 |

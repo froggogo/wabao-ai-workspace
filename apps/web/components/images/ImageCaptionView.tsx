@@ -5,6 +5,8 @@ import { useRouter } from "next/navigation";
 import { api, ApiError } from "@/lib/api";
 import { useCaptionOptions, useMediaAssets } from "@/lib/hooks";
 import { Markdown } from "@/components/Markdown";
+import { ImagesTabs } from "@/components/images/ImagesTabs";
+import { ImagePickerDialog } from "@/components/images/ImagePickerDialog";
 import type { MediaAsset } from "@/lib/types";
 
 /** 参考图来源：从作品画廊挑选，或本地上传 */
@@ -14,12 +16,15 @@ interface PickedImage {
   from: "gallery" | "upload";
 }
 
-export function ImageCaptionView() {
+export function ImageCaptionView({ initialImageUrl }: { initialImageUrl?: string }) {
   const router = useRouter();
   const { options } = useCaptionOptions();
   const { assets } = useMediaAssets();
 
-  const [picked, setPicked] = useState<PickedImage[]>([]);
+  // 由作品页「写文案」带入的图片，直接作为首张参考图
+  const [picked, setPicked] = useState<PickedImage[]>(
+    initialImageUrl ? [{ url: initialImageUrl, from: "gallery" }] : [],
+  );
   const [purpose, setPurpose] = useState("xiaohongshu");
   const [tone, setTone] = useState("friendly");
   const [brief, setBrief] = useState("");
@@ -30,6 +35,7 @@ export function ImageCaptionView() {
   const [error, setError] = useState<{ message: string; upgrade?: boolean } | null>(null);
   const [uploading, setUploading] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const abortRef = useRef<AbortController | null>(null);
 
@@ -125,30 +131,14 @@ export function ImageCaptionView() {
   };
 
   return (
-    <div className="h-full overflow-y-auto bg-slate-50 lg:overflow-hidden">
-      <div className="flex min-h-full flex-col lg:h-full lg:flex-row">
+    <div className="flex h-full flex-col bg-slate-50">
+      <ImagesTabs />
+
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto lg:flex-row lg:overflow-hidden">
         {/* ── 左侧参数 ── */}
         <aside className="w-full shrink-0 border-b border-slate-200 bg-white lg:w-[360px] lg:overflow-y-auto lg:border-b-0 lg:border-r">
           <div className="p-5">
-            <button
-              onClick={() => router.push("/app/images")}
-              className="text-sm text-slate-400 transition hover:text-slate-600"
-            >
-              ← 返回绘图
-            </button>
-            <div className="mt-2 flex items-center gap-2">
-              <span className="text-xl">📝</span>
-              <h1 className="text-lg font-bold text-slate-800">图生文案</h1>
-              {options?.mock && (
-                <span
-                  className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-600"
-                  title="后端未配置 OPENAI_API_KEY，当前返回示例文案用于演示"
-                >
-                  mock
-                </span>
-              )}
-            </div>
-            <p className="mt-1 text-xs text-slate-400">
+            <p className="text-xs text-slate-400">
               上传或选择图片，一键生成小红书笔记 / 营销文案 / alt 描述
             </p>
 
@@ -213,21 +203,31 @@ export function ImageCaptionView() {
                 )}
               </div>
 
-              {/* 从画廊选择 */}
+              {/* 从画廊选择：仅横向展示最近 8 张，更多走弹窗，保证左栏高度恒定 */}
               {assets.length > 0 && (
                 <div className="mt-3">
-                  <div className="mb-1.5 text-[11px] text-slate-400">或从我的作品中选择</div>
+                  <div className="mb-1.5 flex items-center justify-between gap-2">
+                    <span className="text-[11px] text-slate-400">或从我的作品中选择</span>
+                    <button
+                      onClick={() => setPickerOpen(true)}
+                      className="text-[11px] font-medium text-brand-600 transition hover:underline"
+                    >
+                      浏览全部 →
+                    </button>
+                  </div>
                   <div className="flex gap-2 overflow-x-auto pb-1">
-                    {assets.slice(0, 12).map((a) => {
+                    {assets.slice(0, 8).map((a) => {
                       const active = picked.some((p) => p.url === a.url);
+                      const disabled = !active && picked.length >= maxImages;
                       return (
                         <button
                           key={a.id}
                           onClick={() => toggleGalleryImage(a)}
-                          title={a.prompt}
+                          disabled={disabled}
+                          title={disabled ? `最多选择 ${maxImages} 张` : a.prompt}
                           className={`relative h-14 w-14 shrink-0 overflow-hidden rounded-lg ring-2 transition ${
                             active ? "ring-brand-500" : "ring-transparent hover:ring-slate-300"
-                          }`}
+                          } ${disabled ? "cursor-not-allowed opacity-40" : ""}`}
                         >
                           {/* eslint-disable-next-line @next/next/no-img-element */}
                           <img src={a.url} alt={a.prompt} className="h-full w-full object-cover" />
@@ -239,6 +239,16 @@ export function ImageCaptionView() {
                         </button>
                       );
                     })}
+                    {assets.length > 8 && (
+                      <button
+                        onClick={() => setPickerOpen(true)}
+                        title="浏览全部作品"
+                        className="flex h-14 w-14 shrink-0 flex-col items-center justify-center rounded-lg border border-dashed border-slate-300 text-slate-400 transition hover:border-brand-400 hover:text-brand-500"
+                      >
+                        <span className="text-base leading-none">⋯</span>
+                        <span className="mt-0.5 text-[10px]">更多</span>
+                      </button>
+                    )}
                   </div>
                 </div>
               )}
@@ -397,6 +407,15 @@ export function ImageCaptionView() {
           </div>
         </section>
       </div>
+
+      {pickerOpen && (
+        <ImagePickerDialog
+          selectedUrls={picked.map((p) => p.url)}
+          max={maxImages}
+          onToggle={toggleGalleryImage}
+          onClose={() => setPickerOpen(false)}
+        />
+      )}
     </div>
   );
 }

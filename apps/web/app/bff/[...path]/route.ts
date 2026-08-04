@@ -3,6 +3,7 @@ import {
   ACCESS_COOKIE,
   REFRESH_COOKIE,
   backendUrl,
+  forwardedForHeaders,
   refreshTokens,
   setAuthCookies,
 } from "@/lib/server/auth";
@@ -41,6 +42,7 @@ async function proxy(req: NextRequest, ctx: Ctx): Promise<Response> {
     if (contentType) h["content-type"] = contentType;
     if (accept) h["accept"] = accept;
     if (access) h["authorization"] = `Bearer ${access}`;
+    Object.assign(h, forwardedForHeaders(req));
     return h;
   };
 

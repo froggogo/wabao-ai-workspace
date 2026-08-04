@@ -45,6 +45,39 @@ enum ModerationAction {
   warn
 }
 
+// 配额计数的维度：token 按量、image 按张
+enum QuotaKind {
+  tokens
+  images
+}
+
+enum BillingCycle {
+  monthly
+  yearly
+}
+
+enum SubscriptionStatus {
+  /// 生效中
+  active
+  /// 已申请取消，本周期结束前仍可正常使用
+  canceled
+  /// 已到期失效
+  expired
+}
+
+enum OrderStatus {
+  /// 已创建，等待支付
+  pending
+  /// 支付成功
+  paid
+  /// 支付失败
+  failed
+  /// 用户主动取消或超时关闭
+  canceled
+  /// 已退款
+  refunded
+}
+
 // 媒体资产类型（P2 图像；P4 预留 video）
 enum MediaType {
   image
@@ -64,7 +97,10 @@ model User {
   passwordHash String   @map("password_hash")
   name         String
   avatar       String?
+  /// 冗余字段：权威值在 active Subscription 上。保留是为了让「当前套餐」
+  /// 这类高频读取免去一次关联查询，由 SubscriptionService 单点同步。
   plan         Plan     @default(free)
+  /// 同上，权威值为 Subscription.quotaTokens
   quotaTokens  Int      @default(100000) @map("quota_tokens")
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
@@ -75,6 +111,9 @@ model User {
   usageRecords  UsageRecord[]
   refreshTokens RefreshToken[]
   mediaAssets   MediaAsset[]
+  quotaCounters QuotaCounter[]
+  subscriptions Subscription[]
+  orders        Order[]
 
   @@map("users")
 }
@@ -127,19 +166,24 @@ model Conversation {
   assistant Assistant? @relation(fields: [assistantId], references: [id], onDelete: SetNull)
   messages  Message[]
 
-  @@index([userId])
+  // 会话列表固定按「置顶优先 + 最近更新」排序，索引需与 orderBy 完全对应才能免排序
+  @@index([userId, pinned, updatedAt])
   @@map("conversations")
 }
 
 model Message {
   id             String      @id @default(cuid())
+  /// 全局单调递增的排序键。created_at 精度只到毫秒，同毫秒写入的消息顺序不确定，
+  /// 会让上下文拼装与「定位上一条用户消息」出现错序，故以序列号作为唯一排序依据。
+  seq            Int         @default(autoincrement())
   conversationId String      @map("conversation_id")
   role           MessageRole
   content        String
   model          String?
   inputTokens    Int         @default(0) @map("input_tokens")
   outputTokens   Int         @default(0) @map("output_tokens")
-  cost           Float       @default(0)
+  /// 金额一律用定点数：浮点累加会产生误差，对账时对不上账
+  cost           Decimal     @default(0) @db.Decimal(12, 6)
   finishReason   String?     @map("finish_reason")
   flagged        Boolean     @default(false)
   parentId       String?     @map("parent_id") // 重生成链
@@ -150,7 +194,8 @@ model Message {
   conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   feedbacks    Feedback[]
 
-  @@index([conversationId])
+  // 会话内按 seq 取历史是最热的查询路径；复合索引同时覆盖「仅按 conversation_id 过滤」
+  @@index([conversationId, seq])
   @@map("messages")
 }
 
@@ -195,13 +240,13 @@ model Creation {
   outputJson   Json?    @map("output_json")
   inputTokens  Int      @default(0) @map("input_tokens")
   outputTokens Int      @default(0) @map("output_tokens")
-  cost         Float    @default(0)
+  cost         Decimal  @default(0) @db.Decimal(12, 6)
   createdAt    DateTime @default(now()) @map("created_at")
 
   user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   template Template @relation(fields: [templateId], references: [id])
 
-  @@index([userId])
+  @@index([userId, createdAt])
   @@map("creations")
 }
 
@@ -212,15 +257,132 @@ model UsageRecord {
   model        String
   inputTokens  Int          @default(0) @map("input_tokens")
   outputTokens Int          @default(0) @map("output_tokens")
-  cost         Float        @default(0)
+  cost         Decimal      @default(0) @db.Decimal(12, 6)
   cached       Boolean      @default(false)
   createdAt    DateTime     @default(now()) @map("created_at")
 
+  /// 业务溯源（裸字符串、无 FK）：实体删除后仍保留用量审计，对账按 id 反查即可。
+  messageId    String? @map("message_id")
+  creationId   String? @map("creation_id")
+  mediaAssetId String? @map("media_asset_id")
+  /// 幂等键。同一业务动作重复落账时命中唯一约束，UsageService.record 直接返回已有成本。
+  /// 约定形如 chat:{messageId} / studio:{creationId} / image:{mediaAssetId} / vision:msg:{id}。
+  idempotencyKey String? @unique @map("idempotency_key")
+
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@index([userId])
-  @@index([createdAt])
+  // 用量聚合始终是「某用户 + 某时间区间」，单列索引会退化成过滤后再排序
+  @@index([userId, createdAt])
+  @@index([messageId])
+  @@index([creationId])
+  @@index([mediaAssetId])
   @@map("usage_records")
+}
+
+/// 订阅：套餐权益的权威来源，同时定义配额的计量周期。
+///
+/// 每个用户恒有一条 active 订阅（注册时自动开通免费版），由部分唯一索引
+/// `subscriptions_user_id_active_key` 保证唯一性，见对应迁移。
+model Subscription {
+  id     String             @id @default(cuid())
+  userId String             @map("user_id")
+  plan   Plan
+  cycle  BillingCycle       @default(monthly)
+  status SubscriptionStatus @default(active)
+
+  /// 配额周期（右开区间）。用量统计与额度重置一律以此为准，而非自然月：
+  /// 自然月会让月中升级的用户把升级前已消耗的量算进新套餐额度里。
+  /// 年付订阅的额度同样按 30 天滚动重置，只是 expiresAt 在一年后。
+  currentPeriodStart DateTime @map("current_period_start")
+  currentPeriodEnd   DateTime @map("current_period_end")
+
+  /// 订阅整体到期时间，到期未续费则转为 expired 并回落免费版。
+  /// null 表示永不过期，免费版用之——否则一旦周期滚动任务停摆，
+  /// 全体免费用户会集体失效。付费订阅必须有明确到期日。
+  expiresAt DateTime? @map("expires_at")
+
+  /// 下单时锁定的权益快照。套餐目录调价不应影响已付费用户的当期权益。
+  quotaTokens   Int @map("quota_tokens")
+  monthlyImages Int @map("monthly_images")
+
+  /// 降级与取消一律在**周期末**生效，期间维持原有权益，避免用户为已付费的
+  /// 当期额度买单却提前被限流。此处记录周期末要切换到的目标套餐。
+  pendingPlan Plan?     @map("pending_plan")
+  canceledAt  DateTime? @map("canceled_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  orders Order[]
+
+  @@index([userId, status])
+  /// 供周期滚动任务扫描到期订阅
+  @@index([status, currentPeriodEnd])
+  @@map("subscriptions")
+}
+
+/// 订单：一次付费意图的完整记录，支付回调据此改订阅状态。
+///
+/// 订阅变更必须经由订单完成，不能直接改 user.plan——否则没有任何凭据可对账，
+/// 也无法处理重复回调、退款与补单。
+model Order {
+  id String @id @default(cuid())
+  /// 对外订单号，同时作为向支付渠道发起时的商户单号
+  orderNo        String  @unique @map("order_no")
+  userId         String  @map("user_id")
+  subscriptionId String? @map("subscription_id")
+
+  plan  Plan
+  cycle BillingCycle
+
+  /// 应付金额（元）。与 cost 同理用定点数，杜绝浮点误差
+  amount   Decimal @db.Decimal(12, 2)
+  currency String  @default("CNY")
+
+  status OrderStatus @default(pending)
+
+  /// 支付渠道（wechat / alipay / stripe…）与渠道侧交易号。
+  /// 交易号唯一，使重复回调天然幂等。
+  provider      String? @map("provider")
+  providerTxnId String? @unique @map("provider_txn_id")
+
+  paidAt     DateTime? @map("paid_at")
+  canceledAt DateTime? @map("canceled_at")
+  refundedAt DateTime? @map("refunded_at")
+  /// 失败原因 / 渠道原始回调等排查信息
+  metadata Json?
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  subscription Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([status, createdAt])
+  @@map("orders")
+}
+
+/// 配额计数器：配额的「唯一权威值」，用于在调用模型**之前**原子地预留额度。
+///
+/// usage_records 是逐条流水（用于用量报表与对账），聚合求和无法阻止并发请求
+/// 同时通过配额校验；这张表以单行 UPDATE 的条件自增来串行化预留，天然免疫竞态。
+/// 两者职责分离：计数器管准入，流水管统计。
+model QuotaCounter {
+  id     String    @id @default(cuid())
+  userId String    @map("user_id")
+  /// 计量周期标识。当前为自然月 UTC 的 YYYY-MM；接入订阅后改为订阅周期起始日。
+  period String
+  kind   QuotaKind
+  /// 已占用量（tokens 为 token 数，images 为张数），含尚未结算的预留量
+  used      Int      @default(0)
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, period, kind])
+  @@map("quota_counters")
 }
 
 model ModerationRecord {
@@ -233,7 +395,7 @@ model ModerationRecord {
   action     ModerationAction
   createdAt  DateTime          @default(now()) @map("created_at")
 
-  @@index([userId])
+  @@index([userId, createdAt])
   @@map("moderation_records")
 }
 
@@ -260,14 +422,16 @@ model MediaAsset {
   /// 变体来源资产 id，形成重绘链
   sourceId     String?     @map("source_id")
   flagged      Boolean     @default(false)
-  cost         Float       @default(0)
+  cost         Decimal     @default(0) @db.Decimal(12, 6)
   createdAt    DateTime    @default(now()) @map("created_at")
 
   user     User         @relation(fields: [userId], references: [id], onDelete: Cascade)
   source_  MediaAsset?  @relation("MediaVariations", fields: [sourceId], references: [id], onDelete: SetNull)
   variations MediaAsset[] @relation("MediaVariations")
 
-  @@index([userId])
-  @@index([createdAt])
+  // 作品画廊与图像配额统计：按用户 + 时间倒序
+  @@index([userId, createdAt])
+  // 多模态输入的图片归属校验走 where userId + url IN (...)，缺索引会全表扫
+  @@index([userId, url])
   @@map("media_assets")
 }

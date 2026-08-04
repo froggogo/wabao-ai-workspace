@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { backendUrl, setAuthCookies } from "@/lib/server/auth";
+import { backendUrl, forwardedForHeaders, setAuthCookies } from "@/lib/server/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -7,7 +7,7 @@ export async function POST(req: Request) {
   const body = await req.text();
   const upstream = await fetch(`${backendUrl()}/auth/register`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", ...forwardedForHeaders(req) },
     body,
     cache: "no-store",
   });

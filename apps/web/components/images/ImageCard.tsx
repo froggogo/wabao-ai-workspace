@@ -12,12 +12,14 @@ export function ImageCard({
   asset,
   onPreview,
   onVariation,
+  onCaption,
   onDelete,
   compact,
 }: {
   asset: MediaAsset;
   onPreview: () => void;
   onVariation?: () => void;
+  onCaption?: () => void;
   onDelete?: () => void;
   compact?: boolean;
 }) {
@@ -65,6 +67,11 @@ export function ImageCard({
           {onVariation && (
             <IconBtn title="生成变体" onClick={onVariation}>
               🔄
+            </IconBtn>
+          )}
+          {onCaption && (
+            <IconBtn title="用这张图写文案" onClick={onCaption}>
+              📝
             </IconBtn>
           )}
           {onDelete && (

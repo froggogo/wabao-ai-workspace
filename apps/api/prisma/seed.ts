@@ -1,4 +1,5 @@
 import { PrismaClient, Prisma } from '@prisma/client';
+import { CAPTION_TEMPLATE_ID } from '@wabao/shared';
 
 const prisma = new PrismaClient();
 
@@ -104,15 +105,35 @@ const templates: Prisma.TemplateCreateInput[] = [
   },
 ];
 
+/**
+ * 平台内部模板：不面向用户展示（enabled=false，不会出现在 GET /templates），
+ * 仅用于让「图 → 文案」的产物能作为 Creation 落库（creations.template_id 外键）。
+ */
+const internalTemplates: Prisma.TemplateCreateInput[] = [
+  {
+    id: CAPTION_TEMPLATE_ID,
+    name: '图生文案',
+    category: '图像',
+    icon: '🖼️',
+    description: '依据图片生成营销文案 / 小红书笔记 / alt text，由图像模块调用。',
+    prompt: '',
+    inputSchema: { fields: [] },
+    outputSchema: Prisma.DbNull,
+    enabled: false,
+  },
+];
+
 async function main() {
-  for (const tpl of templates) {
+  for (const tpl of [...templates, ...internalTemplates]) {
     await prisma.template.upsert({
       where: { id: tpl.id },
       update: tpl,
       create: tpl,
     });
   }
-  console.log(`✅ 已注入 ${templates.length} 个模板`);
+  console.log(
+    `✅ 已注入 ${templates.length} 个模板（另有 ${internalTemplates.length} 个内部模板）`,
+  );
 }
 
 main()

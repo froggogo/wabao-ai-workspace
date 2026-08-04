@@ -1,6 +1,6 @@
 import { plainToInstance } from 'class-transformer';
 import { validateSync } from 'class-validator';
-import { MAX_CAPTION_IMAGES } from '@wabao/shared';
+import { MAX_ANALYZE_IMAGES, MAX_CAPTION_IMAGES } from '@wabao/shared';
 import {
   AnalyzeImageDto,
   CaptionImageDto,
@@ -76,6 +76,15 @@ describe('图像 DTO 校验（入参边界）', () => {
     it('拒绝非法尺寸', () => {
       expect(invalidFields(CreateVariationDto, { size: '800x600' })).toContain('size');
     });
+
+    // whitelist:true 会剥离未声明的字段，缺了 stream 声明就等于不支持非流式
+    it('接受 stream 参数（与文生图一致，支持非流式）', () => {
+      expect(invalidFields(CreateVariationDto, { stream: false })).toEqual([]);
+    });
+
+    it('stream 必须是布尔值', () => {
+      expect(invalidFields(CreateVariationDto, { stream: 'no' })).toContain('stream');
+    });
   });
 
   describe('AnalyzeImageDto', () => {
@@ -118,6 +127,25 @@ describe('图像 DTO 校验（入参边界）', () => {
           image_urls: ['/a.png'],
           question: 'q',
           conversation_id: 'c1',
+        }),
+      ).toEqual([]);
+    });
+
+    // 无上限时可传任意多张图放大成本，与 caption 一致地设界
+    it('图片数量超过上限被拒绝', () => {
+      expect(
+        invalidFields(AnalyzeImageDto, {
+          image_urls: Array(MAX_ANALYZE_IMAGES + 1).fill('/a.png'),
+          question: 'q',
+        }),
+      ).toContain('image_urls');
+    });
+
+    it('图片数量等于上限时通过', () => {
+      expect(
+        invalidFields(AnalyzeImageDto, {
+          image_urls: Array(MAX_ANALYZE_IMAGES).fill('/a.png'),
+          question: 'q',
         }),
       ).toEqual([]);
     });

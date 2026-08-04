@@ -22,6 +22,7 @@ import {
   ImageModelId,
   ImageSizeId,
   ImageStyleId,
+  MAX_ANALYZE_IMAGES,
   MAX_CAPTION_IMAGES,
   MAX_IMAGES_PER_REQUEST,
 } from '@wabao/shared';
@@ -66,11 +67,19 @@ export class CreateVariationDto {
   @IsOptional()
   @IsIn(IMAGE_SIZE_IDS)
   size?: ImageSizeId;
+
+  /** 是否使用 SSE 流式返回进度（默认 true），与文生图保持一致 */
+  @IsOptional()
+  @IsBoolean()
+  stream?: boolean;
 }
 
 export class AnalyzeImageDto {
   @IsArray()
   @IsString({ each: true })
+  @ArrayMaxSize(MAX_ANALYZE_IMAGES, {
+    message: `一次最多可携带 ${MAX_ANALYZE_IMAGES} 张图片`,
+  })
   image_urls!: string[];
 
   @IsString()

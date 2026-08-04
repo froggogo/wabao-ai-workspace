@@ -6,6 +6,7 @@ import { api, ApiError } from "@/lib/api";
 import { useImageOptions, useMediaAssets } from "@/lib/hooks";
 import { ImageCard } from "@/components/images/ImageCard";
 import { ImageLightbox } from "@/components/images/ImageLightbox";
+import { ImagesTabs } from "@/components/images/ImagesTabs";
 import type {
   ImageModelId,
   ImageQuotaSnapshot,
@@ -25,7 +26,7 @@ const INSPIRATIONS = [
 export function ImagesView() {
   const router = useRouter();
   const { options, mutate: mutateOptions } = useImageOptions();
-  const { assets, mutate: mutateAssets } = useMediaAssets();
+  const { mutate: mutateAssets } = useMediaAssets();
 
   const [prompt, setPrompt] = useState("");
   const [model, setModel] = useState<ImageModelId>("gpt-image-2-mini");
@@ -40,6 +41,7 @@ export function ImagesView() {
   const [quota, setQuota] = useState<ImageQuotaSnapshot | null>(null);
   const [preview, setPreview] = useState<MediaAsset | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const promptRef = useRef<HTMLTextAreaElement>(null);
 
   // 参数默认值以后端目录为准（套餐不同默认可用模型不同）
   useEffect(() => {
@@ -114,6 +116,9 @@ export function ImagesView() {
     setPendingCount(0);
   };
 
+  const goCaption = (asset: MediaAsset) =>
+    router.push(`/app/images/caption?image=${encodeURIComponent(asset.url)}`);
+
   const removeAsset = async (id: string) => {
     setResults((prev) => prev.filter((a) => a.id !== id));
     mutateAssets((list) => (list ?? []).filter((a) => a.id !== id), { revalidate: false });
@@ -158,33 +163,17 @@ export function ImagesView() {
     }
   };
 
-  const recent = assets.slice(0, 8);
-
   return (
-    <div className="h-full overflow-y-auto bg-slate-50 lg:overflow-hidden">
+    <div className="flex h-full flex-col bg-slate-50">
+      <ImagesTabs quota={quota} />
+
       {/* 移动端上下堆叠、桌面端左右分栏 */}
-      <div className="flex min-h-full flex-col lg:h-full lg:flex-row">
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto lg:flex-row lg:overflow-hidden">
         {/* ── 左侧参数面板 ── */}
         <aside className="w-full shrink-0 border-b border-slate-200 bg-white lg:w-[340px] lg:overflow-y-auto lg:border-b-0 lg:border-r">
           <div className="p-5">
-            <div className="flex items-center gap-2">
-              <span className="text-xl">🎨</span>
-              <h1 className="text-lg font-bold text-slate-800">AI 绘图</h1>
-              {options?.mock && (
-                <span
-                  className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-600"
-                  title="后端未配置 OPENAI_API_KEY，当前返回占位图用于演示全链路"
-                >
-                  mock
-                </span>
-              )}
-            </div>
-            <p className="mt-1 text-xs text-slate-400">
-              用文字描述画面，一键生成配图 / 海报 / 插画
-            </p>
-
             {/* 描述 */}
-            <label className="mt-5 block">
+            <label className="block">
               <span className="mb-1.5 flex items-center justify-between text-sm font-medium text-slate-600">
                 <span>画面描述</span>
                 <span className="text-[11px] font-normal text-slate-400">
@@ -192,6 +181,7 @@ export function ImagesView() {
                 </span>
               </span>
               <textarea
+                ref={promptRef}
                 rows={5}
                 maxLength={2000}
                 value={prompt}
@@ -206,20 +196,6 @@ export function ImagesView() {
                 className="w-full resize-none rounded-xl border border-slate-200 p-3 text-sm outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-100"
               />
             </label>
-
-            {/* 灵感 */}
-            <div className="mt-2 flex flex-wrap gap-1.5">
-              {INSPIRATIONS.map((s) => (
-                <button
-                  key={s}
-                  onClick={() => setPrompt(s)}
-                  title={s}
-                  className="max-w-full truncate rounded-full border border-slate-200 px-2.5 py-1 text-[11px] text-slate-500 transition hover:border-brand-300 hover:text-brand-600"
-                >
-                  {s.slice(0, 14)}…
-                </button>
-              ))}
-            </div>
 
             {/* 风格 */}
             <div className="mt-5">
@@ -369,38 +345,6 @@ export function ImagesView() {
               </button>
             </div>
 
-            {/* 配额 */}
-            {quota && (
-              <div className="mt-4 rounded-xl bg-slate-50 p-3">
-                <div className="flex items-center justify-between text-[11px] text-slate-500">
-                  <span>本月绘图额度</span>
-                  <span>
-                    {quota.remaining === null
-                      ? "不限量"
-                      : `${quota.used} / ${quota.quota} 张`}
-                  </span>
-                </div>
-                {quota.remaining !== null && quota.quota > 0 && (
-                  <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-slate-200">
-                    <div
-                      className="h-full rounded-full bg-brand-500 transition-all"
-                      style={{
-                        width: `${Math.min(100, (quota.used / quota.quota) * 100)}%`,
-                      }}
-                    />
-                  </div>
-                )}
-                {quota.remaining !== null && quota.remaining <= 3 && (
-                  <button
-                    onClick={() => router.push("/app/pricing")}
-                    className="mt-2 text-[11px] font-medium text-brand-600 hover:underline"
-                  >
-                    额度即将用尽，升级套餐 →
-                  </button>
-                )}
-              </div>
-            )}
-
             <p className="mt-3 text-center text-[11px] text-slate-300">
               Ctrl / ⌘ + Enter 快速生成
             </p>
@@ -409,31 +353,6 @@ export function ImagesView() {
 
         {/* ── 右侧结果区 ── */}
         <section className="flex min-w-0 flex-1 flex-col lg:overflow-hidden">
-          <header className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 bg-white/80 px-5 py-3 backdrop-blur">
-            <span className="text-sm font-medium text-slate-500">
-              {generating
-                ? "正在生成…"
-                : results.length > 0
-                  ? `本次生成 ${results.length} 张`
-                  : "生成结果"}
-            </span>
-            <div className="flex flex-wrap gap-2">
-            <button
-              onClick={() => router.push("/app/images/caption")}
-              className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-600 transition hover:border-brand-300 hover:text-brand-600"
-              title="上传或选择图片，生成小红书笔记 / 营销文案"
-            >
-              📝 图生文案
-            </button>
-            <button
-              onClick={() => router.push("/app/images/gallery")}
-              className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-600 transition hover:border-brand-300 hover:text-brand-600"
-            >
-              🖼️ 我的作品 {assets.length > 0 ? `(${assets.length})` : ""}
-            </button>
-            </div>
-          </header>
-
           <div className="flex-1 p-5 lg:overflow-y-auto">
             {error && (
               <div className="mb-4 flex flex-wrap items-center gap-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-700">
@@ -449,33 +368,53 @@ export function ImagesView() {
               </div>
             )}
 
-            {results.length === 0 && pendingCount === 0 && !error ? (
-              <EmptyState
-                recent={recent}
-                onPick={(a) => setPreview(a)}
-                onGoGallery={() => router.push("/app/images/gallery")}
-              />
+            {results.length === 0 && pendingCount === 0 ? (
+              !error && (
+                <EmptyState
+                  onPickInspiration={(s) => {
+                    setPrompt(s);
+                    promptRef.current?.focus();
+                  }}
+                />
+              )
             ) : (
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
-                {results.map((a) => (
-                  <ImageCard
-                    key={a.id}
-                    asset={a}
-                    onPreview={() => setPreview(a)}
-                    onVariation={canVariation ? () => makeVariation(a) : undefined}
-                    onDelete={() => removeAsset(a.id)}
-                  />
-                ))}
-                {/* 骨架位：与所选比例同宽高，避免出图时布局跳动 */}
-                {Array.from({ length: pendingCount }).map((_, i) => (
-                  <SkeletonCard
-                    key={`sk_${i}`}
-                    ratio={
-                      currentSize ? currentSize.width / currentSize.height : 1
-                    }
-                  />
-                ))}
-              </div>
+              <>
+                <div className="mb-3 flex items-center justify-between">
+                  <span className="text-sm text-slate-500">
+                    {generating ? "正在生成…" : `本次生成 ${results.length} 张`}
+                  </span>
+                  {!generating && results.length > 0 && (
+                    <button
+                      onClick={() => setResults([])}
+                      className="text-xs text-slate-400 transition hover:text-slate-600"
+                      title="仅清空本次结果，作品仍保留在「我的作品」"
+                    >
+                      清空
+                    </button>
+                  )}
+                </div>
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+                  {results.map((a) => (
+                    <ImageCard
+                      key={a.id}
+                      asset={a}
+                      onPreview={() => setPreview(a)}
+                      onVariation={canVariation ? () => makeVariation(a) : undefined}
+                      onCaption={canVariation ? () => goCaption(a) : undefined}
+                      onDelete={() => removeAsset(a.id)}
+                    />
+                  ))}
+                  {/* 骨架位：与所选比例同宽高，避免出图时布局跳动 */}
+                  {Array.from({ length: pendingCount }).map((_, i) => (
+                    <SkeletonCard
+                      key={`sk_${i}`}
+                      ratio={
+                        currentSize ? currentSize.width / currentSize.height : 1
+                      }
+                    />
+                  ))}
+                </div>
+              </>
             )}
           </div>
         </section>
@@ -493,6 +432,7 @@ export function ImagesView() {
                 }
               : undefined
           }
+          onCaption={canVariation ? () => goCaption(preview) : undefined}
           onDelete={() => {
             setPreview(null);
             removeAsset(preview.id);
@@ -519,58 +459,39 @@ function SkeletonCard({ ratio }: { ratio: number }) {
   );
 }
 
-function EmptyState({
-  recent,
-  onPick,
-  onGoGallery,
-}: {
-  recent: MediaAsset[];
-  onPick: (a: MediaAsset) => void;
-  onGoGallery: () => void;
-}) {
+function EmptyState({ onPickInspiration }: { onPickInspiration: (s: string) => void }) {
   return (
-    <div className="flex h-full flex-col">
-      <div className="flex flex-1 flex-col items-center justify-center py-12 text-center">
-        <div className="flex h-20 w-20 items-center justify-center rounded-3xl bg-gradient-to-br from-brand-400 to-indigo-600 text-4xl shadow-lg shadow-brand-500/25">
-          🎨
-        </div>
-        <div className="mt-4 text-lg font-medium text-slate-700">描述你想要的画面</div>
-        <p className="mt-1 max-w-sm text-sm text-slate-400">
-          在左侧填写描述、选择风格与比例，点击「生成图片」即可获得 AI 创作的配图
-        </p>
+    <div className="flex h-full flex-col items-center justify-center py-10">
+      <div className="flex h-20 w-20 items-center justify-center rounded-3xl bg-gradient-to-br from-brand-400 to-indigo-600 text-4xl shadow-lg shadow-brand-500/25">
+        🎨
       </div>
+      <div className="mt-4 text-lg font-medium text-slate-700">描述你想要的画面</div>
+      <p className="mt-1 max-w-sm text-center text-sm text-slate-400">
+        在左侧填写描述、选择风格与比例，点击「生成图片」即可获得 AI 创作的配图
+      </p>
 
-      {recent.length > 0 && (
-        <div className="mt-2">
-          <div className="mb-3 flex items-center justify-between">
-            <h2 className="text-sm font-medium text-slate-500">最近作品</h2>
-            <button
-              onClick={onGoGallery}
-              className="text-xs text-brand-600 hover:underline"
-            >
-              查看全部 →
-            </button>
-          </div>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-            {recent.map((a) => (
-              <button
-                key={a.id}
-                onClick={() => onPick(a)}
-                title={a.prompt}
-                className="group overflow-hidden rounded-xl border border-slate-200 bg-white transition hover:-translate-y-0.5 hover:border-brand-300 hover:shadow-md"
-              >
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={a.url}
-                  alt={a.prompt}
-                  loading="lazy"
-                  className="aspect-square w-full object-cover"
-                />
-              </button>
-            ))}
-          </div>
+      <div className="mt-8 w-full max-w-2xl">
+        <div className="mb-2.5 flex items-center gap-3">
+          <span className="text-xs text-slate-400">💡 没有思路？试试这些</span>
+          <span className="h-px flex-1 bg-slate-200" />
         </div>
-      )}
+        <div className="grid gap-2 sm:grid-cols-2">
+          {INSPIRATIONS.map((s) => (
+            <button
+              key={s}
+              onClick={() => onPickInspiration(s)}
+              className="group rounded-xl border border-slate-200 bg-white p-3 text-left transition hover:-translate-y-0.5 hover:border-brand-300 hover:shadow-sm"
+            >
+              <span className="block text-xs leading-relaxed text-slate-500 transition group-hover:text-slate-700">
+                {s}
+              </span>
+              <span className="mt-1.5 block text-[10px] text-brand-500 opacity-0 transition group-hover:opacity-100">
+                填入描述 →
+              </span>
+            </button>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }

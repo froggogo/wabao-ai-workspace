@@ -94,7 +94,7 @@ export class ImagesController {
     @Body() dto: CreateVariationDto,
     @Res() res: Response,
   ): Promise<void> {
-    await this.pipeImages(this.images.variation(user.id, id, dto), true, res);
+    await this.pipeImages(this.images.variation(user.id, id, dto), dto.stream !== false, res);
   }
 
   /** 上传图片（供看图问答 / 变体输入） */

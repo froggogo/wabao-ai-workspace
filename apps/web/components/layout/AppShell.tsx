@@ -7,8 +7,8 @@ import { PLAN_LABELS } from "@/lib/mockData";
 
 const NAV = [
   { to: "/app/chat", label: "对话", icon: "💬" },
-  { to: "/app/studio", label: "创作", icon: "✨" },
   { to: "/app/images", label: "绘图", icon: "🎨" },
+  { to: "/app/studio", label: "创作", icon: "✨" },
   { to: "/app/assistants", label: "助手", icon: "🎭" },
   { to: "/app/pricing", label: "会员", icon: "👑" },
   { to: "/app/settings", label: "设置", icon: "⚙️" },

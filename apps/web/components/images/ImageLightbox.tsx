@@ -10,11 +10,13 @@ export function ImageLightbox({
   asset,
   onClose,
   onVariation,
+  onCaption,
   onDelete,
 }: {
   asset: MediaAsset;
   onClose: () => void;
   onVariation?: () => void;
+  onCaption?: () => void;
   onDelete?: () => void;
 }) {
   const [copied, setCopied] = useState(false);
@@ -119,6 +121,14 @@ export function ImageLightbox({
                 className="w-full rounded-xl border border-slate-200 py-2.5 text-sm text-slate-600 transition hover:bg-slate-50"
               >
                 🔄 生成变体
+              </button>
+            )}
+            {onCaption && (
+              <button
+                onClick={onCaption}
+                className="w-full rounded-xl border border-slate-200 py-2.5 text-sm text-slate-600 transition hover:bg-slate-50"
+              >
+                📝 用这张图写文案
               </button>
             )}
             {onDelete && (

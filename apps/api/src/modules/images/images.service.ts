@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { join, basename } from 'node:path';
 import {
   CAPTION_PURPOSES,
+  CAPTION_TEMPLATE_ID,
   CAPTION_TONES,
   DEFAULT_CAPTION_PURPOSE,
   DEFAULT_CAPTION_TONE,
@@ -42,9 +43,6 @@ import {
 
 /** 图像理解按等效 token 计量时的单张图片基准（OpenAI 视觉输入约 700~1500 token/张） */
 const VISION_TOKENS_PER_IMAGE = 1000;
-
-/** 图 → 文案在创作历史中的虚拟模板 id（非 Template 表记录，用于区分来源） */
-const CAPTION_TEMPLATE_ID = 'image-caption';
 
 @Injectable()
 export class ImagesService {
@@ -161,7 +159,8 @@ export class ImagesService {
         { plan: info.plan, max_batch: info.limits.maxBatch },
       );
     }
-    await this.quota.assertQuota(userId, requested);
+    // 先把额度占住再调模型，避免并发超发；后续任一步失败都要归还
+    await this.quota.reserve(userId, requested);
 
     // ① 输入审核（prompt）
     const inMod = await this.moderation.check(dto.prompt, 'input', { userId });
@@ -180,6 +179,7 @@ export class ImagesService {
     };
 
     if (inMod.action === 'block') {
+      await this.quota.release(userId, requested);
       yield {
         event: 'error',
         data: {
@@ -202,12 +202,18 @@ export class ImagesService {
         count: requested,
       });
     } catch (err) {
+      await this.quota.release(userId, requested);
       this.logger.warn(`图像生成失败：${(err as Error).message}`);
       yield {
         event: 'error',
         data: { code: 'upstream_error', message: `图像服务异常：${(err as Error).message}` },
       };
       return;
+    }
+
+    // 实际产出可能少于请求张数，多占的额度立即归还
+    if (results.length < requested) {
+      await this.quota.release(userId, requested - results.length);
     }
 
     // ③ 落盘 + 落库 + 逐张下发
@@ -244,7 +250,7 @@ export class ImagesService {
     }
 
     // ④ 计量（图像按张数记录，token 字段记 0，成本按张计价）
-    await this.recordImageUsage(userId, model, assets.length);
+    await this.recordImageUsage(userId, model, assets);
 
     const after = await this.quota.info(userId);
     yield {
@@ -284,7 +290,7 @@ export class ImagesService {
     if (!isImageModelAllowed(info.plan, model)) {
       throw new AppException('forbidden', '当前套餐不可使用该图像模型，请升级后重试');
     }
-    await this.quota.assertQuota(userId, 1);
+    await this.quota.reserve(userId, 1);
 
     const size = (dto.size ?? source.size ?? DEFAULT_IMAGE_SIZE) as ImageSizeId;
     const prompt = dto.prompt?.trim() || source.prompt;
@@ -292,6 +298,7 @@ export class ImagesService {
     if (dto.prompt?.trim()) {
       const mod = await this.moderation.check(dto.prompt, 'input', { userId });
       if (mod.action === 'block') {
+        await this.quota.release(userId, 1);
         yield {
           event: 'error',
           data: {
@@ -317,11 +324,16 @@ export class ImagesService {
         size,
       });
     } catch (err) {
+      await this.quota.release(userId, 1);
       yield {
         event: 'error',
         data: { code: 'upstream_error', message: `变体生成失败：${(err as Error).message}` },
       };
       return;
+    }
+
+    if (results.length < 1) {
+      await this.quota.release(userId, 1);
     }
 
     const dim = IMAGE_SIZES.find((s) => s.id === size) ?? IMAGE_SIZES[0];
@@ -351,7 +363,7 @@ export class ImagesService {
       yield { event: 'image.item', data: this.toDto(asset) };
     }
 
-    await this.recordImageUsage(userId, model, created.length);
+    await this.recordImageUsage(userId, model, created);
 
     const after = await this.quota.info(userId);
     yield {
@@ -424,6 +436,7 @@ export class ImagesService {
     if (dto.image_urls.length === 0) {
       throw new AppException('invalid_request', '请至少提供一张图片');
     }
+    await this.assertOwnedImageUrls(userId, dto.image_urls);
     await this.usage.assertQuota(userId);
 
     // 校验会话归属（越权直接拒绝，避免把消息写进别人的会话）
@@ -444,15 +457,17 @@ export class ImagesService {
       return;
     }
 
-    // 用户消息先落库，保证即使后续生成失败，用户的提问与图片也不会丢
+    // 用户消息先落库，保证即使后续生成失败，用户的提问与图片也不会丢。
+    // 附件一律存无签名相对路径，避免签名过期后历史消息里的链接失效。
     let userMessageId: string | undefined;
     if (conversation) {
+      const attachmentUrls = dto.image_urls.map((u) => this.storage.toRelativeUrl(u));
       const userMsg = await this.prisma.message.create({
         data: {
           conversationId: conversation.id,
           role: 'user',
           content: dto.question,
-          attachments: dto.image_urls as Prisma.InputJsonValue,
+          attachments: attachmentUrls as Prisma.InputJsonValue,
         },
       });
       userMessageId = userMsg.id;
@@ -526,6 +541,8 @@ export class ImagesService {
       model: 'gpt-5.6-terra',
       inputTokens,
       outputTokens,
+      messageId: assistantMessageId,
+      idempotencyKey: assistantMessageId ? `vision:msg:${assistantMessageId}` : undefined,
     });
 
     yield {
@@ -557,6 +574,7 @@ export class ImagesService {
     if (dto.image_urls.length === 0) {
       throw new AppException('invalid_request', '请至少提供一张参考图');
     }
+    await this.assertOwnedImageUrls(userId, dto.image_urls);
     await this.usage.assertQuota(userId);
 
     const purpose = dto.purpose ?? DEFAULT_CAPTION_PURPOSE;
@@ -661,6 +679,8 @@ export class ImagesService {
       model: 'gpt-5.6-terra',
       inputTokens,
       outputTokens,
+      creationId: creation.id,
+      idempotencyKey: `vision:creation:${creation.id}`,
     });
 
     yield {
@@ -693,19 +713,18 @@ export class ImagesService {
 
   // ---------- 内部辅助 ----------
 
-  /** 图像用量落 usage_records：token 记 0，成本按张计价，便于用量页按功能维度聚合 */
-  private async recordImageUsage(userId: string, model: ImageModelId, count: number) {
-    if (count === 0) return;
-    for (let i = 0; i < count; i++) {
-      await this.prisma.usageRecord.create({
-        data: {
-          userId,
-          feature: 'image',
-          model,
-          inputTokens: 0,
-          outputTokens: 0,
-          cost: estimateImageCost(model, 1),
-        },
+  /** 图像用量落 usage_records：按资产逐条记，带幂等键避免重试双计 */
+  private async recordImageUsage(userId: string, model: ImageModelId, assets: MediaAsset[]) {
+    for (const asset of assets) {
+      await this.usage.record({
+        userId,
+        feature: 'image',
+        model,
+        inputTokens: 0,
+        outputTokens: 0,
+        cost: estimateImageCost(model, 1),
+        mediaAssetId: asset.id,
+        idempotencyKey: `image:${asset.id}`,
       });
     }
   }
@@ -729,6 +748,30 @@ export class ImagesService {
     return asset;
   }
 
+  /**
+   * 校验多模态输入的图片归属。每个 URL 都必须是当前用户名下的媒体资产
+   * （生成 / 变体 / 上传均可），否则拒绝。
+   *
+   * 少了这道校验，调用方可以传任意外链让服务端连带上游模型去拉取（SSRF），
+   * 也能拿他人的图片地址来做看图问答。
+   */
+  private async assertOwnedImageUrls(userId: string, urls: string[]): Promise<void> {
+    const normalized = urls.map((u) => this.storage.toRelativeUrl(u));
+    const owned = await this.prisma.mediaAsset.findMany({
+      where: { userId, url: { in: normalized } },
+      select: { url: true },
+    });
+    const ownedUrls = new Set(owned.map((a) => a.url));
+    const invalid = [...new Set(normalized.filter((u) => !ownedUrls.has(u)))];
+    if (invalid.length > 0) {
+      throw new AppException(
+        'invalid_request',
+        '参考图必须是你在蛙宝生成或上传的图片，请先上传后再试',
+        { invalid_urls: invalid },
+      );
+    }
+  }
+
   /** 校验会话存在且属于当前用户，避免把消息写入他人会话 */
   private async findOwnedConversation(userId: string, id: string) {
     const conv = await this.prisma.conversation.findUnique({ where: { id } });
@@ -746,7 +789,8 @@ export class ImagesService {
       id: a.id,
       type: a.type,
       source: a.source,
-      url: a.url,
+      // 对外返回签名 URL；库内仍存无签名相对路径
+      url: this.storage.signUrl(a.url),
       prompt: a.prompt,
       revised_prompt: a.revisedPrompt,
       model: a.model,

@@ -1,3 +1,4 @@
+import { Prisma } from '@prisma/client';
 import { PLAN_IMAGE_LIMITS } from '@wabao/shared';
 import { UsersService } from './users.service';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -25,10 +26,14 @@ function setup(plan = 'plus', usedImages = 0) {
   return { prisma, service: new UsersService(prisma as unknown as PrismaService) };
 }
 
-/** groupBy 返回值构造器 */
+/**
+ * groupBy 返回值构造器。
+ * cost 列是 numeric，Prisma 会返回 Decimal 而非 number，这里如实模拟，
+ * 否则测试会漏掉「Decimal 未转换就参与算术」这类问题。
+ */
 const row = (feature: string, input: number, output: number, calls: number, cost = 1) => ({
   feature,
-  _sum: { inputTokens: input, outputTokens: output, cost },
+  _sum: { inputTokens: input, outputTokens: output, cost: new Prisma.Decimal(cost) },
   _count: { _all: calls },
 });
 
@@ -44,6 +49,21 @@ describe('UsersService.usage（用量聚合，含 P2 图像维度）', () => {
     expect(res.used_tokens).toBe(82_000);
     expect(res.remaining_tokens).toBe(2_000_000 - 82_000);
     expect(res.plan).toBe('plus');
+  });
+
+  // cost 在库中是 numeric，Prisma 返回 Decimal 对象，而 Decimal 的 JSON 形态是字符串。
+  // 若直接透传，接口里的 cost 会从数字变成字符串，前端计算随之出错。
+  it('cost 以数字输出，不泄漏 Decimal 类型', async () => {
+    const { service, prisma } = setup('plus');
+    prisma.usageRecord.groupBy.mockResolvedValue([row('chat', 100, 100, 2, 12.3456)]);
+
+    const res = await service.usage('u1');
+    const cost = res.breakdown[0].cost;
+
+    expect(typeof cost).toBe('number');
+    expect(cost).toBe(12.35);
+    // 序列化后仍应是数字字面量，而非带引号的字符串
+    expect(JSON.stringify({ cost })).toBe('{"cost":12.35}');
   });
 
   it('breakdown 覆盖 P2 新增的 image / vision 并带中文标签', async () => {

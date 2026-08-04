@@ -7,6 +7,7 @@ import { useImageOptions, useMediaAssets } from "@/lib/hooks";
 import { IMAGE_STYLES } from "@wabao/shared";
 import { ImageCard } from "@/components/images/ImageCard";
 import { ImageLightbox } from "@/components/images/ImageLightbox";
+import { ImagesTabs } from "@/components/images/ImagesTabs";
 import type { MediaAsset } from "@/lib/types";
 
 type Filter = "all" | "generation" | "variation";
@@ -28,6 +29,9 @@ export function ImageGalleryView() {
   const [error, setError] = useState<{ message: string; upgrade?: boolean } | null>(null);
 
   const canVariation = options?.limits.vision ?? false;
+
+  const goCaption = (asset: MediaAsset) =>
+    router.push(`/app/images/caption?image=${encodeURIComponent(asset.url)}`);
 
   // 画廊中出现过的风格，用于动态生成筛选项
   const usedStyles = useMemo(() => {
@@ -74,40 +78,17 @@ export function ImageGalleryView() {
   };
 
   return (
-    <div className="h-full overflow-y-auto">
-      <div className="mx-auto max-w-6xl px-4 py-8 sm:px-6">
-        {/* 头部 */}
-        <div className="flex flex-wrap items-end justify-between gap-3">
-          <div>
-            <button
-              onClick={() => router.push("/app/images")}
-              className="text-sm text-slate-400 transition hover:text-slate-600"
-            >
-              ← 返回绘图
-            </button>
-            <h1 className="mt-1 text-2xl font-bold text-slate-800">我的作品</h1>
-            <p className="mt-1 text-sm text-slate-400">
-              共 {assets.length} 张 · 支持下载、生成变体与删除
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <button
-              onClick={() => router.push("/app/images/caption")}
-              className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm text-slate-600 transition hover:border-brand-300 hover:text-brand-600"
-            >
-              📝 图生文案
-            </button>
-            <button
-              onClick={() => router.push("/app/images")}
-              className="rounded-xl bg-brand-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-brand-700"
-            >
-              ✨ 继续创作
-            </button>
-          </div>
-        </div>
+    <div className="flex h-full flex-col bg-slate-50">
+      <ImagesTabs />
+
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="mx-auto max-w-6xl px-4 py-6 sm:px-6">
+          <p className="text-sm text-slate-400">
+            共 {assets.length} 张 · 支持下载、生成变体与删除
+          </p>
 
         {/* 筛选栏 */}
-        <div className="mt-6 flex flex-wrap items-center gap-2">
+        <div className="mt-4 flex flex-wrap items-center gap-2">
           {FILTERS.map((f) => (
             <button
               key={f.id}
@@ -186,11 +167,13 @@ export function ImageGalleryView() {
                 compact
                 onPreview={() => setPreview(a)}
                 onVariation={canVariation ? () => makeVariation(a) : undefined}
+                onCaption={canVariation ? () => goCaption(a) : undefined}
                 onDelete={() => removeAsset(a.id)}
               />
             ))}
           </div>
         )}
+        </div>
       </div>
 
       {preview && (
@@ -205,6 +188,7 @@ export function ImageGalleryView() {
                 }
               : undefined
           }
+          onCaption={canVariation ? () => goCaption(preview) : undefined}
           onDelete={() => {
             removeAsset(preview.id);
             setPreview(null);

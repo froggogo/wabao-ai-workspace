@@ -65,7 +65,9 @@ export class UsersService {
         label: featureLabel[r.feature] ?? r.feature,
         calls: r._count._all,
         tokens,
-        cost: Math.round((r._sum.cost ?? 0) * 100) / 100,
+        // cost 是 Decimal，必须转成 number 再输出：
+        // Decimal 会被 JSON 序列化成字符串，直接透传会改变接口契约
+        cost: Math.round(Number(r._sum.cost ?? 0) * 100) / 100,
       };
     });
 

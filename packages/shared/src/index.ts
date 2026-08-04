@@ -486,6 +486,16 @@ export const DEFAULT_CAPTION_TONE: CaptionToneId = 'friendly';
 /** 单次「图 → 文案」最多可上传的参考图数量 */
 export const MAX_CAPTION_IMAGES = 4;
 
+/**
+ * 「图 → 文案」在 creations 表中使用的模板 id。
+ * creations.template_id 是指向 templates 的外键，因此这条模板必须由 seed 注入
+ * （以 enabled=false 落库，不出现在模板列表中）。
+ */
+export const CAPTION_TEMPLATE_ID = 'image-caption';
+
+/** 单次看图问答最多可携带的图片数量 */
+export const MAX_ANALYZE_IMAGES = 4;
+
 export function isValidCaptionPurpose(v: string): v is CaptionPurposeId {
   return CAPTION_PURPOSE_IDS.includes(v as CaptionPurposeId);
 }

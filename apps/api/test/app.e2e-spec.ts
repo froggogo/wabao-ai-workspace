@@ -9,6 +9,8 @@ import { AppModule } from '../src/app.module';
 import { AllExceptionsFilter } from '../src/common/filters/all-exceptions.filter';
 import { TransformInterceptor } from '../src/common/interceptors/transform.interceptor';
 import { AppException } from '../src/common/errors';
+import { createSignedMediaMiddleware } from '../src/common/middleware/signed-media.middleware';
+import { StorageService } from '../src/modules/images/storage.service';
 
 /**
  * 端到端测试：覆盖 P1 核心链路（注册 → 会话 → 流式对话(非流式聚合) → 创作 → 审核 → 用量）
@@ -27,11 +29,11 @@ describe('蛙宝 API (e2e)', () => {
     app = moduleRef.createNestApplication<NestExpressApplication>();
     app.setGlobalPrefix('api/v1');
 
-    // 与 main.ts 保持一致：挂载 /uploads 静态托管，使生成的图片可被直接访问
+    // 与 main.ts 保持一致：签名媒体中间件（默认强制 ?exp=&sig=）
     const config = app.get(ConfigService);
     const mediaRoot = resolve(process.cwd(), config.get<string>('MEDIA_ROOT') ?? 'uploads');
     mkdirSync(mediaRoot, { recursive: true });
-    (app as NestExpressApplication).useStaticAssets(mediaRoot, { prefix: '/uploads/' });
+    (app as NestExpressApplication).use(createSignedMediaMiddleware(app.get(StorageService)));
 
     app.useGlobalPipes(
       new ValidationPipe({
@@ -249,17 +251,18 @@ describe('蛙宝 API (e2e)', () => {
       expect(res.body.error.code).toBe('forbidden');
     });
 
-    it('非法参数返回 422 invalid_request', async () => {
+    // invalid_request 映射为 400（见 common/errors.ts）；422 是 content_flagged 专用
+    it('非法参数返回 400 invalid_request', async () => {
       await http()
         .post('/api/v1/images/generations')
         .set('Authorization', `Bearer ${token}`)
         .send({ prompt: 'x', stream: false })
-        .expect(422);
+        .expect(400);
       await http()
         .post('/api/v1/images/generations')
         .set('Authorization', `Bearer ${token}`)
         .send({ prompt: '合法描述', size: '4096x4096', stream: false })
-        .expect(422);
+        .expect(400);
     });
 
     it('绘图描述命中审核返回 422 content_flagged', async () => {
@@ -287,7 +290,7 @@ describe('蛙宝 API (e2e)', () => {
       expect(uploadUrl).toMatch(/^\/uploads\//);
     });
 
-    it('上传不支持的格式返回 422', async () => {
+    it('上传不支持的格式返回 400', async () => {
       const res = await http()
         .post('/api/v1/images/uploads')
         .set('Authorization', `Bearer ${token}`)
@@ -295,7 +298,7 @@ describe('蛙宝 API (e2e)', () => {
           filename: 'a.pdf',
           contentType: 'application/pdf',
         })
-        .expect(422);
+        .expect(400);
       expect(res.body.error.code).toBe('invalid_request');
     });
 
@@ -544,12 +547,12 @@ describe('蛙宝 API (e2e)', () => {
       expect(caption.inputs.purpose).toBe('xiaohongshu');
     });
 
-    it('图 → 文案参数非法返回 422', async () => {
+    it('图 → 文案参数非法返回 400', async () => {
       await http()
         .post('/api/v1/images/captions')
         .set('Authorization', `Bearer ${plusToken}`)
         .send({ image_urls: [plusUploadUrl], purpose: 'tiktok', stream: false })
-        .expect(422);
+        .expect(400);
     });
 
     it('免费版图 → 文案返回 403', async () => {
@@ -561,12 +564,12 @@ describe('蛙宝 API (e2e)', () => {
       expect(res.body.error.code).toBe('forbidden');
     });
 
-    it('看图问答缺少图片返回 422', async () => {
+    it('看图问答缺少图片返回 400', async () => {
       const res = await http()
         .post('/api/v1/images/analyses')
         .set('Authorization', `Bearer ${plusToken}`)
         .send({ image_urls: [], question: '这是什么？', stream: false })
-        .expect(422);
+        .expect(400);
       expect(res.body.error.code).toBe('invalid_request');
     });
 

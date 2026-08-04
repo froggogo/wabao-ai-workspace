@@ -38,10 +38,12 @@ interface Deps {
     save: jest.Mock;
     saveBase64: jest.Mock;
     remove: jest.Mock;
+    signUrl: jest.Mock;
     toAbsoluteUrl: jest.Mock;
+    toRelativeUrl: jest.Mock;
     rootDir: string;
   };
-  quota: { info: jest.Mock; assertQuota: jest.Mock };
+  quota: { info: jest.Mock; reserve: jest.Mock; release: jest.Mock };
   moderation: { check: jest.Mock };
   usage: { record: jest.Mock; assertQuota: jest.Mock };
 }
@@ -75,7 +77,11 @@ function setup(plan: keyof typeof PLAN_IMAGE_LIMITS = 'plus', used = 0) {
           }),
         ),
         findUnique: jest.fn(),
-        findMany: jest.fn().mockResolvedValue([]),
+        // 带 url.in 条件的查询来自图片归属校验：默认回显为「都属于当前用户」，
+        // 越权场景由具体用例覆盖为 []。其余查询（作品列表）保持返回空列表。
+        findMany: jest.fn((args?: { where?: { url?: { in?: string[] } } }) =>
+          Promise.resolve(args?.where?.url?.in?.map((url) => ({ url })) ?? []),
+        ),
         count: jest.fn().mockResolvedValue(0),
         delete: jest.fn().mockResolvedValue({}),
       },
@@ -121,12 +127,17 @@ function setup(plan: keyof typeof PLAN_IMAGE_LIMITS = 'plus', used = 0) {
         Promise.resolve({ url: `/uploads/img_${++seq}.svg`, bytes: 256, mimeType: mime }),
       ),
       remove: jest.fn().mockResolvedValue(undefined),
+      signUrl: jest.fn((u: string) => u),
       toAbsoluteUrl: jest.fn((u: string) => `https://cdn.test${u}`),
+      toRelativeUrl: jest.fn((u: string) =>
+        u.replace(/^https:\/\/cdn\.test/, '').split('?')[0],
+      ),
       rootDir: '/tmp/media',
     },
     quota: {
       info: jest.fn().mockResolvedValue(quotaInfo),
-      assertQuota: jest.fn().mockResolvedValue(quotaInfo),
+      reserve: jest.fn().mockResolvedValue(quotaInfo),
+      release: jest.fn().mockResolvedValue(undefined),
     },
     moderation: {
       check: jest.fn().mockResolvedValue({ action: 'allow', flagged: false, categories: [] }),
@@ -224,12 +235,12 @@ describe('ImagesService（P2 · M5 图像编排）', () => {
     it('配额校验按请求张数传入（批量整体校验）', async () => {
       const { service, deps } = setup('plus');
       await collect(service.generate('u1', { prompt: 'x', n: 3 }));
-      expect(deps.quota.assertQuota).toHaveBeenCalledWith('u1', 3);
+      expect(deps.quota.reserve).toHaveBeenCalledWith('u1', 3);
     });
 
     it('配额不足时向上抛出 rate_limited（不产生任何图片）', async () => {
       const { service, deps } = setup('plus');
-      deps.quota.assertQuota.mockRejectedValue(
+      deps.quota.reserve.mockRejectedValue(
         new AppException('rate_limited', '额度不足', { quota: {} }),
       );
       await expect(collect(service.generate('u1', { prompt: 'x' }))).rejects.toMatchObject({
@@ -237,6 +248,53 @@ describe('ImagesService（P2 · M5 图像编排）', () => {
       });
       expect(deps.imageAi.generate).not.toHaveBeenCalled();
       expect(deps.prisma.mediaAsset.create).not.toHaveBeenCalled();
+    });
+
+    // 预留一旦泄漏就会长期占用用户额度，各失败分支都必须归还
+    it('上游生成失败时归还全部预留', async () => {
+      const { service, deps } = setup('plus');
+      deps.imageAi.generate.mockRejectedValue(new Error('服务超时'));
+
+      const events = await collect(service.generate('u1', { prompt: 'x', n: 2 }));
+
+      expect(eventsOf(events)).toContain('error');
+      expect(deps.quota.release).toHaveBeenCalledWith('u1', 2);
+    });
+
+    it('输入审核拦截时归还全部预留', async () => {
+      const { service, deps } = setup('plus');
+      deps.moderation.check.mockResolvedValue({
+        action: 'block',
+        flagged: true,
+        categories: ['violence'],
+      });
+
+      await collect(service.generate('u1', { prompt: '违规', n: 2 }));
+
+      expect(deps.quota.release).toHaveBeenCalledWith('u1', 2);
+      expect(deps.prisma.mediaAsset.create).not.toHaveBeenCalled();
+    });
+
+    it('实际产出少于请求张数时归还差额', async () => {
+      const { service, deps } = setup('plus');
+      // 请求 3 张但上游只返回 1 张
+      deps.imageAi.generate.mockResolvedValue([{ b64: 'A', mimeType: 'image/svg+xml' }]);
+
+      await collect(service.generate('u1', { prompt: 'x', n: 3 }));
+
+      expect(deps.quota.release).toHaveBeenCalledWith('u1', 2);
+    });
+
+    it('全部成功时不归还任何额度', async () => {
+      const { service, deps } = setup('plus');
+      deps.imageAi.generate.mockResolvedValue([
+        { b64: 'A', mimeType: 'image/svg+xml' },
+        { b64: 'B', mimeType: 'image/svg+xml' },
+      ]);
+
+      await collect(service.generate('u1', { prompt: 'x', n: 2 }));
+
+      expect(deps.quota.release).not.toHaveBeenCalled();
     });
   });
 
@@ -314,14 +372,16 @@ describe('ImagesService（P2 · M5 图像编排）', () => {
       ]);
       await collect(service.generate('u1', { prompt: 'x', n: 2 }));
 
-      expect(deps.prisma.usageRecord.create).toHaveBeenCalledTimes(2);
-      const rec = deps.prisma.usageRecord.create.mock.calls[0][0].data;
+      expect(deps.usage.record).toHaveBeenCalledTimes(2);
+      const rec = deps.usage.record.mock.calls[0][0];
       expect(rec).toMatchObject({
         userId: 'u1',
         feature: 'image',
         inputTokens: 0,
         outputTokens: 0,
       });
+      expect(rec.mediaAssetId).toBeTruthy();
+      expect(rec.idempotencyKey).toMatch(/^image:/);
       expect(rec.cost).toBeGreaterThan(0);
     });
 
@@ -375,7 +435,7 @@ describe('ImagesService（P2 · M5 图像编排）', () => {
       expect(data(events[1]).code).toBe('upstream_error');
       expect(String(data(events[1]).message)).toContain('服务超时');
       // 失败不应计量
-      expect(deps.prisma.usageRecord.create).not.toHaveBeenCalled();
+      expect(deps.usage.record).not.toHaveBeenCalled();
     });
   });
 
@@ -520,8 +580,8 @@ describe('ImagesService（P2 · M5 图像编排）', () => {
     it('上传不消耗绘图额度（不计入 media 生成计量）', async () => {
       const { service, deps } = setup('plus');
       await service.upload('u1', file());
-      expect(deps.prisma.usageRecord.create).not.toHaveBeenCalled();
-      expect(deps.quota.assertQuota).not.toHaveBeenCalled();
+      expect(deps.usage.record).not.toHaveBeenCalled();
+      expect(deps.quota.reserve).not.toHaveBeenCalled();
     });
   });
 
@@ -540,6 +600,66 @@ describe('ImagesService（P2 · M5 图像编排）', () => {
       await expect(
         collect(service.analyze('u1', { image_urls: [], question: 'q' })),
       ).rejects.toMatchObject({ code: 'invalid_request' });
+    });
+
+    it('图片不属于当前用户时拒绝，且不调用视觉模型、不落消息', async () => {
+      const { service, deps } = setup('plus');
+      deps.prisma.mediaAsset.findMany.mockResolvedValueOnce([]);
+
+      await expect(
+        collect(
+          service.analyze('u1', {
+            image_urls: ['/uploads/someone-else.png'],
+            question: 'q',
+            conversation_id: 'c1',
+          }),
+        ),
+      ).rejects.toMatchObject({
+        code: 'invalid_request',
+        details: { invalid_urls: ['/uploads/someone-else.png'] },
+      });
+
+      expect(deps.imageAi.analyzeStream).not.toHaveBeenCalled();
+      expect(deps.prisma.message.create).not.toHaveBeenCalled();
+      expect(deps.usage.record).not.toHaveBeenCalled();
+    });
+
+    it('外链图片一律拒绝（不给上游模型拉取任意地址的机会）', async () => {
+      const { service, deps } = setup('plus');
+      deps.prisma.mediaAsset.findMany.mockResolvedValueOnce([]);
+
+      await expect(
+        collect(
+          service.analyze('u1', { image_urls: ['http://evil.internal/secret.png'], question: 'q' }),
+        ),
+      ).rejects.toMatchObject({ code: 'invalid_request' });
+      expect(deps.imageAi.analyzeStream).not.toHaveBeenCalled();
+    });
+
+    it('归属校验按 userId + url 精确查询', async () => {
+      const { service, deps } = setup('plus');
+      await collect(service.analyze('u1', { image_urls: ['/uploads/a.png'], question: 'q' }));
+
+      expect(deps.prisma.mediaAsset.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { userId: 'u1', url: { in: ['/uploads/a.png'] } },
+        }),
+      );
+    });
+
+    it('配置了公网前缀时，绝对地址会先归一化再校验归属', async () => {
+      const { service, deps } = setup('plus');
+      await collect(
+        service.analyze('u1', {
+          image_urls: ['https://cdn.test/uploads/a.png'],
+          question: 'q',
+        }),
+      );
+
+      expect(deps.prisma.mediaAsset.findMany.mock.calls[0][0].where.url.in).toEqual([
+        '/uploads/a.png',
+      ]);
+      expect(deps.imageAi.analyzeStream).toHaveBeenCalled();
     });
 
     it('SSE 事件复用对话契约 message.start/delta/done', async () => {
@@ -859,6 +979,35 @@ describe('ImagesService（P2 · M5 图像编排）', () => {
       const { service } = setup('plus');
       await expect(collect(service.caption('u1', { image_urls: [] }))).rejects.toMatchObject({
         code: 'invalid_request',
+      });
+    });
+
+    it('参考图不属于当前用户时拒绝，且不建创作记录', async () => {
+      const { service, deps } = setup('plus');
+      deps.prisma.mediaAsset.findMany.mockResolvedValueOnce([]);
+
+      await expect(
+        collect(service.caption('u1', { image_urls: ['/uploads/someone-else.png'] })),
+      ).rejects.toMatchObject({
+        code: 'invalid_request',
+        details: { invalid_urls: ['/uploads/someone-else.png'] },
+      });
+
+      expect(deps.prisma.creation.create).not.toHaveBeenCalled();
+      expect(deps.imageAi.analyzeStream).not.toHaveBeenCalled();
+    });
+
+    it('多张参考图中只要有一张越权就整体拒绝', async () => {
+      const { service, deps } = setup('plus');
+      deps.prisma.mediaAsset.findMany.mockResolvedValueOnce([{ url: '/uploads/mine.png' }]);
+
+      await expect(
+        collect(
+          service.caption('u1', { image_urls: ['/uploads/mine.png', '/uploads/others.png'] }),
+        ),
+      ).rejects.toMatchObject({
+        code: 'invalid_request',
+        details: { invalid_urls: ['/uploads/others.png'] },
       });
     });
 

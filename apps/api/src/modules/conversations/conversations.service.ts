@@ -20,6 +20,13 @@ import {
 
 const HISTORY_LIMIT = 20;
 
+/**
+ * 调模型前预留额度时，对「本次回复输出量」的保守估计。
+ * 真实用量在生成结束后由 settleTokens 修正，这里只需覆盖绝大多数回复的长度，
+ * 使并发请求无法凭「都还没记账」同时挤过配额校验。
+ */
+const RESERVED_OUTPUT_TOKENS = 2000;
+
 /** 输出审核命中拦截时，用于替换违规内容的脱敏提示（落库 + 前端展示） */
 const OUTPUT_BLOCKED_NOTICE = '⚠️ 该回复包含不符合规范的内容，已被拦截。';
 
@@ -79,7 +86,7 @@ export class ConversationsService {
     const c = await this.findOwned(userId, id);
     const messages = await this.prisma.message.findMany({
       where: { conversationId: id },
-      orderBy: { createdAt: 'asc' },
+      orderBy: { seq: 'asc' },
     });
     return { ...this.toConversationDto(c), messages: messages.map((m) => this.toMessageDto(m)) };
   }
@@ -114,7 +121,7 @@ export class ConversationsService {
     const [items, total] = await Promise.all([
       this.prisma.message.findMany({
         where: { conversationId: id },
-        orderBy: { createdAt: 'asc' },
+        orderBy: { seq: 'asc' },
         skip,
         take: pageSize,
       }),
@@ -168,7 +175,9 @@ export class ConversationsService {
       return;
     }
 
-    const turns = await this.buildContext(conversation, dto.content, userMsg.id);
+    const turns = await this.buildContext(conversation, dto.content, {
+      excludeMessageId: userMsg.id,
+    });
     yield* this.streamAssistant({ userId, conversation, model, contextTurns: turns });
   }
 
@@ -185,14 +194,17 @@ export class ConversationsService {
     await this.usage.assertQuota(userId);
     await this.billing.assertModelAllowed(userId, this.router.resolve(conversation.model));
     const userMsg = await this.prisma.message.findFirst({
-      where: { conversationId: conversation.id, role: 'user', createdAt: { lt: target.createdAt } },
-      orderBy: { createdAt: 'desc' },
+      where: { conversationId: conversation.id, role: 'user', seq: { lt: target.seq } },
+      orderBy: { seq: 'desc' },
     });
     if (!userMsg) {
       throw new AppException('invalid_request', '找不到对应的用户消息');
     }
     const model = this.router.resolve(conversation.model);
-    const turns = await this.buildContext(conversation, userMsg.content, userMsg.id);
+    // 截断到这条用户消息之前：目标回复本身、以及它之后的消息都不进入上下文
+    const turns = await this.buildContext(conversation, userMsg.content, {
+      beforeSeq: userMsg.seq,
+    });
     yield* this.streamAssistant({
       userId,
       conversation,
@@ -235,6 +247,18 @@ export class ConversationsService {
   }): AsyncGenerator<SseEvent> {
     const { userId, conversation, model, contextTurns, parentId } = params;
 
+    // 原子预留额度。必须早于任何副作用与首个 SSE 事件：此时响应头尚未发出，
+    // 超额可以走标准 JSON 错误返回 429。
+    const estimatedInput = contextTurns.reduce((sum, t) => sum + estimateTokens(t.content), 0);
+    const reserved = estimatedInput + RESERVED_OUTPUT_TOKENS;
+    await this.usage.reserveTokens(userId, reserved);
+    let settled = false;
+    const settle = async (actual: number) => {
+      if (settled) return;
+      settled = true;
+      await this.usage.settleTokens(userId, reserved, actual);
+    };
+
     const assistantMsg = await this.prisma.message.create({
       data: {
         conversationId: conversation.id,
@@ -251,67 +275,91 @@ export class ConversationsService {
     let acc = '';
     let finishReason = 'stop';
     let realUsage: TokenUsage | null = null;
+    // 客户端中途断开时消费方会丢弃生成器，触发 finally；此时按已产出的内容结算，
+    // 把剩余预留归还，避免额度被断开的请求长期占用。
     try {
-      const genOptions = {
-        temperature: conversation.temperature,
-        reasoningEffort: conversation.reasoningEffort as ReasoningEffort,
-        onUsage: (u: TokenUsage) => {
-          realUsage = u;
+      try {
+        const genOptions = {
+          temperature: conversation.temperature,
+          reasoningEffort: conversation.reasoningEffort as ReasoningEffort,
+          onUsage: (u: TokenUsage) => {
+            realUsage = u;
+          },
+        };
+        for await (const delta of this.ai.stream(
+          contextTurns,
+          model,
+          controller.signal,
+          genOptions,
+        )) {
+          acc += delta;
+          yield { event: 'message.delta', data: { text: delta } };
+        }
+        if (controller.signal.aborted) {
+          finishReason = 'stopped';
+        }
+      } catch (err) {
+        this.abortRegistry.clear(assistantMsg.id);
+        const partial = await this.finalizeMessage(
+          assistantMsg.id,
+          acc,
+          model,
+          contextTurns,
+          'error',
+          false,
+        );
+        // 上游失败也要归还未消耗的预留，否则失败请求会持续侵蚀用户额度
+        await settle(partial.inputTokens + partial.outputTokens);
+        yield {
+          event: 'error',
+          data: { code: 'upstream_error', message: `模型服务异常：${(err as Error).message}` },
+        };
+        return;
+      }
+      this.abortRegistry.clear(assistantMsg.id);
+
+      // ② 输出审核：命中拦截则用脱敏提示替换违规内容（落库与前端展示），
+      //    但计费仍按模型实际生成的内容(acc)计量。
+      const outMod = await this.moderation.check(acc, 'output', {
+        userId,
+        refId: assistantMsg.id,
+      });
+      const flagged = outMod.action === 'block';
+      const storedContent = flagged ? OUTPUT_BLOCKED_NOTICE : acc;
+
+      const { inputTokens, outputTokens } = await this.finalizeMessage(
+        assistantMsg.id,
+        storedContent,
+        model,
+        contextTurns,
+        flagged ? 'content_filter' : finishReason,
+        flagged,
+        acc,
+        realUsage,
+      );
+
+      await settle(inputTokens + outputTokens);
+      await this.usage.record({
+        userId,
+        feature: 'chat',
+        model,
+        inputTokens,
+        outputTokens,
+        messageId: assistantMsg.id,
+        idempotencyKey: `chat:${assistantMsg.id}`,
+      });
+
+      yield {
+        event: 'message.done',
+        data: {
+          finish_reason: flagged ? 'content_filter' : finishReason,
+          usage: { input_tokens: inputTokens, output_tokens: outputTokens },
+          ...(flagged ? { flagged: true, filtered_content: storedContent } : {}),
         },
       };
-      for await (const delta of this.ai.stream(
-        contextTurns,
-        model,
-        controller.signal,
-        genOptions,
-      )) {
-        acc += delta;
-        yield { event: 'message.delta', data: { text: delta } };
-      }
-      if (controller.signal.aborted) {
-        finishReason = 'stopped';
-      }
-    } catch (err) {
-      this.abortRegistry.clear(assistantMsg.id);
-      await this.finalizeMessage(assistantMsg.id, acc, model, contextTurns, 'error', false);
-      yield {
-        event: 'error',
-        data: { code: 'upstream_error', message: `模型服务异常：${(err as Error).message}` },
-      };
-      return;
+    } finally {
+      await settle(estimatedInput + estimateTokens(acc));
     }
-    this.abortRegistry.clear(assistantMsg.id);
-
-    // ② 输出审核：命中拦截则用脱敏提示替换违规内容（落库与前端展示），
-    //    但计费仍按模型实际生成的内容(acc)计量。
-    const outMod = await this.moderation.check(acc, 'output', {
-      userId,
-      refId: assistantMsg.id,
-    });
-    const flagged = outMod.action === 'block';
-    const storedContent = flagged ? OUTPUT_BLOCKED_NOTICE : acc;
-
-    const { inputTokens, outputTokens } = await this.finalizeMessage(
-      assistantMsg.id,
-      storedContent,
-      model,
-      contextTurns,
-      flagged ? 'content_filter' : finishReason,
-      flagged,
-      acc,
-      realUsage,
-    );
-
-    await this.usage.record({ userId, feature: 'chat', model, inputTokens, outputTokens });
-
-    yield {
-      event: 'message.done',
-      data: {
-        finish_reason: flagged ? 'content_filter' : finishReason,
-        usage: { input_tokens: inputTokens, output_tokens: outputTokens },
-        ...(flagged ? { flagged: true, filtered_content: storedContent } : {}),
-      },
-    };
   }
 
   private async finalizeMessage(
@@ -343,10 +391,17 @@ export class ConversationsService {
     return { inputTokens, outputTokens };
   }
 
+  /**
+   * 组装送给模型的上下文。
+   *
+   * @param opts.excludeMessageId 刚落库、稍后会作为 userContent 追加的消息，避免重复。
+   * @param opts.beforeSeq 只取该序号之前的历史。重新生成时截断到目标回复之前，
+   *   否则模型会看到「问题 → 旧答案 → 同一个问题」，重生成结果被旧答案带偏。
+   */
   private async buildContext(
     conversation: Conversation,
     userContent: string,
-    excludeMessageId: string,
+    opts: { excludeMessageId?: string; beforeSeq?: number } = {},
   ): Promise<ChatTurn[]> {
     const assistant = conversation.assistantId
       ? await this.prisma.assistant.findUnique({ where: { id: conversation.assistantId } })
@@ -354,21 +409,33 @@ export class ConversationsService {
 
     // 取「最近」HISTORY_LIMIT 条历史：倒序查询后反转为时间正序，
     // 避免长会话里永远只带上最早的历史而丢失近期上下文。
+    // 多取一倍，为剔除被重新生成取代的旧回复留出余量。
     const recentRows = await this.prisma.message.findMany({
       where: {
         conversationId: conversation.id,
-        id: { not: excludeMessageId },
         content: { not: '' },
+        ...(opts.excludeMessageId ? { id: { not: opts.excludeMessageId } } : {}),
+        ...(opts.beforeSeq !== undefined ? { seq: { lt: opts.beforeSeq } } : {}),
       },
-      orderBy: { createdAt: 'desc' },
-      take: HISTORY_LIMIT,
+      orderBy: { seq: 'desc' },
+      take: HISTORY_LIMIT * 2,
+      select: { id: true, role: true, content: true, parentId: true },
     });
-    const historyRows = recentRows.reverse();
 
-    const history = historyRows.map((m) => ({
-      role: m.role as 'user' | 'assistant',
-      content: m.content,
-    }));
+    // 被某条消息的 parentId 指向的，是「重新生成前」的旧版本回复。
+    // 新回复总是排在旧回复之后，因此在这个倒序窗口内一定能一并取到。
+    const superseded = new Set(
+      recentRows.map((m) => m.parentId).filter((id): id is string => id !== null),
+    );
+
+    const history = recentRows
+      .filter((m) => !superseded.has(m.id))
+      .slice(0, HISTORY_LIMIT)
+      .reverse()
+      .map((m) => ({
+        role: m.role as 'user' | 'assistant',
+        content: m.content,
+      }));
 
     return this.prompt.buildChatMessages({
       systemPrompt: assistant?.systemPrompt,

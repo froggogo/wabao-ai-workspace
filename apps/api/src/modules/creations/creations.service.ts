@@ -178,7 +178,15 @@ export class CreationsService {
       },
     });
 
-    await this.usage.record({ userId, feature: 'studio', model, inputTokens, outputTokens });
+    await this.usage.record({
+      userId,
+      feature: 'studio',
+      model,
+      inputTokens,
+      outputTokens,
+      creationId: creation.id,
+      idempotencyKey: `studio:${creation.id}`,
+    });
 
     yield {
       event: 'message.done',

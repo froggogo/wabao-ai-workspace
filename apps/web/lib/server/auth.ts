@@ -12,6 +12,23 @@ export function backendUrl(): string {
   return process.env.API_INTERNAL_URL ?? "http://localhost:3001/api/v1";
 }
 
+/**
+ * 向后端透传客户端来源地址。
+ *
+ * 浏览器请求先落到本 BFF，再由服务端转发给 NestJS，后端因此只能看到 BFF 的地址。
+ * 若不透传，后端基于 IP 的限流会把全体用户当成同一个调用方。这里把本进程收到的
+ * X-Forwarded-For 原样接力（BFF 前置的网关/CDN 已在其中追加了真实客户端地址），
+ * 后端配合 trust proxy 即可还原。
+ */
+export function forwardedForHeaders(req: Request): Record<string, string> {
+  const h: Record<string, string> = {};
+  const xff = req.headers.get("x-forwarded-for") ?? req.headers.get("x-real-ip");
+  if (xff) h["x-forwarded-for"] = xff;
+  const proto = req.headers.get("x-forwarded-proto");
+  if (proto) h["x-forwarded-proto"] = proto;
+  return h;
+}
+
 export function cookieOptions() {
   return {
     httpOnly: true,

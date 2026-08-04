@@ -21,9 +21,9 @@
 apps/api/
 ├── prisma/
 │   ├── schema.prisma      # 数据模型（对应设计文档第六节）
+│   ├── migrations/        # 迁移历史（唯一的建表来源，走 prisma migrate deploy）
 │   ├── seed.ts            # 注入平台级模板
-│   └── sql/               # 幂等增量 SQL（用于不便跑 migrate 的共享库）
-│       └── add_media_assets.sql   # P2：media_assets 表 + 枚举扩展 + messages.attachments
+│   └── sql/               # 历史存档：迁移体系引入前的幂等增量脚本，已不再使用
 ├── src/
 │   ├── main.ts            # 启动入口（全局前缀 /api/v1、CORS、校验、错误包装、/uploads 静态托管）
 │   ├── app.module.ts
@@ -69,29 +69,51 @@ cp .env.example .env   # Windows PowerShell: copy .env.example .env
 
 ```bash
 pnpm prisma:generate     # 生成 Prisma Client（安装后已自动执行一次）
-pnpm prisma:push         # 按 schema 建表（开发期）；生产用 pnpm prisma:migrate
-pnpm seed                # 注入 6 个内容创作模板
+pnpm prisma:deploy       # 应用 prisma/migrations 下的迁移
+pnpm seed                # 注入内容创作模板
 ```
 
-这一步会创建 P2 图像模块所需的 **`media_assets` 表**、`MediaType` / `MediaSource` 枚举、`UsageFeature` 的 `image` / `vision` 取值，以及 `messages.attachments` 字段。
+这一步会创建全部业务表，包括 P2 图像模块的 **`media_assets` 表**、`MediaType` / `MediaSource` 枚举、`UsageFeature` 的 `image` / `vision` 取值，以及 `messages.attachments` 字段。
 
-**验证图像相关结构是否就绪**：
+> **已有数据库（此前用 `prisma db push` 建的）**：迁移目录是后引入的，直接 `prisma:deploy` 会因为表已存在而失败。
+> 先把基线标记为「已应用」，之后正常走迁移即可：
+> ```bash
+> pnpm prisma:baseline     # 等价于 prisma migrate resolve --applied 00000000000000_init
+> pnpm prisma:deploy
+> ```
+
+**验证数据库与 schema 是否一致**：
 
 ```bash
-# 方式一：查看 Prisma 认为的差异（输出为空说明数据库与 schema 一致）
+pnpm prisma:status       # 查看迁移应用情况
+
+# 输出为空说明库结构与 schema 完全一致
 npx prisma migrate diff --from-schema-datasource prisma/schema.prisma \
   --to-schema-datamodel prisma/schema.prisma --script
-
-# 方式二：直接查库
-psql "$DATABASE_URL" -c "\d media_assets"
-psql "$DATABASE_URL" -c "SELECT unnest(enum_range(NULL::\"UsageFeature\"));"
 ```
 
-> **共享数据库 / 无法执行 migrate 的环境**：改用幂等增量脚本，可重复执行不报错：
-> ```bash
-> psql "$DATABASE_URL" -f prisma/sql/add_media_assets.sql
-> ```
-> 注意 `ALTER TYPE ... ADD VALUE` 在部分 PostgreSQL 版本中不能与其他语句共处一个事务，若报错请单独执行前两行。
+### 迁移工作流
+
+| 场景 | 命令 |
+| --- | --- |
+| 改了 `schema.prisma`，本地生成迁移 | `pnpm prisma:migrate`（`migrate dev`，会提示命名） |
+| 部署 / CI 应用迁移 | `pnpm prisma:deploy` |
+| 查看迁移状态 | `pnpm prisma:status` |
+| 已有库首次接入迁移 | `pnpm prisma:baseline` |
+
+> `pnpm prisma:push` 仍然保留，但**只应在一次性试验库上使用**：它绕过迁移历史直接改表结构，会让数据库与 `prisma/migrations` 失去对应关系。日常改表请一律走 `prisma:migrate`。
+
+> ### ⚠️ 共享 / 云数据库上的红线
+>
+> 若 `DATABASE_URL` 指向共享或云数据库（例如与云厂商的监控表共用 `public` schema），
+> **只允许执行 `prisma:deploy`**。它按顺序执行 `migrations/` 下的 SQL，不做结构比对、不会删表。
+>
+> 此类库上**禁止**执行 `prisma migrate dev` 与 `prisma db push`，原因是二者会把
+> 「schema 里没有、库里却存在」的表判定为多余并生成 `DROP TABLE`；`migrate dev` 在
+> 检测到结构漂移时还会提议**重置整个数据库**，一旦误确认将丢失全部业务数据。
+>
+> 需要生成新迁移时，在本地 Docker 库上执行 `prisma:migrate`，或用
+> `prisma migrate dev --create-only` 只生成迁移文件而不触碰数据库，再用 `prisma:deploy` 应用。
 
 ### 4. 启动服务
 
@@ -145,7 +167,7 @@ event: image.done      data: {"count":2,"images":[...],"quota":{"quota":20,"used
 
 | 表 / 字段 | 说明 |
 | --- | --- |
-| `media_assets` | 媒体资产。`source` 区分 `generation`/`variation`/`upload`；`source_id` 自引用构成**变体重绘链**；`flagged` 记录审核结果 |
+| `media_assets` | 媒体资产。`source` 区分 `generation`/`variation`/`upload`；`source_id` 自引用构成**变体重绘链**；`flagged` 记录审核结果。看图问答与图生文案的入参图片**必须命中本表且归属当前用户**，否则返回 `invalid_request` |
 | `messages.attachments` | JSONB 图片 URL 数组。看图问答传 `conversation_id` 时，带图提问会落此字段，刷新页面可回看 |
 | `UsageFeature` | 新增 `image`（按张数）、`vision`（看图问答与图生文案，按等效 token） |
 | `creations` | 图生文案复用此表，`template_id = 'image-caption'` |
@@ -199,12 +221,12 @@ curl http://localhost:3001/api/v1/usage -H "Authorization: Bearer <ACCESS_TOKEN>
 ## 自动化测试
 
 ```bash
-pnpm test        # 单元测试（无需数据库，212 个用例）
+pnpm test        # 单元测试（无需数据库，223 个用例）
 pnpm test:e2e    # 端到端测试（需可连接的 PostgreSQL + 已 seed）
 ```
 
 - **单元测试**（`src/**/*.spec.ts`）：覆盖 AI 编排层（模型校验/token 与成本估算/模型路由/Prompt 组装/mock 流式）、M9 审核本地回退、M12 用量计量，以及 **P2 图像全链路**（契约目录自洽性、mock 出图确定性与 SVG 合法性、生图编排与权益/配额/审核、图像配额时间窗、存储防路径穿越、DTO 边界、看图问答落库、图生文案）。**无需数据库，随处可跑**。
-- **端到端测试**（`test/app.e2e-spec.ts`）：覆盖 P1 链路（注册→鉴权→会话→对话→创作→审核→用量）与 **P2 图像链路**（生图→静态访问→作品列表→上传→删除；升级 Plus 后批量出图→变体重绘链→看图问答落库→图生文案入创作历史→越权保护）。运行前需：`docker compose up -d`（或任意 Postgres）+ `pnpm prisma:push` + `pnpm seed`。
+- **端到端测试**（`test/app.e2e-spec.ts`）：覆盖 P1 链路（注册→鉴权→会话→对话→创作→审核→用量）与 **P2 图像链路**（生图→静态访问→作品列表→上传→删除；升级 Plus 后批量出图→变体重绘链→看图问答落库→图生文案入创作历史→越权保护）。运行前需：`docker compose up -d`（或任意 Postgres）+ `pnpm prisma:deploy` + `pnpm seed`。
 
 ## 关于 Docker
 

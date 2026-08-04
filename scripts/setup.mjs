@@ -76,13 +76,13 @@ if (dockerReady) {
   if (pgUp) {
     log('生成 Prisma Client');
     run('pnpm prisma:generate', api);
-    log('建表（prisma db push）');
-    run('pnpm prisma:push', api);
+    log('建表（prisma migrate deploy）');
+    run('pnpm prisma:deploy', api);
     log('注入模板（seed）');
     run('pnpm seed', api);
     ok('数据库已就绪并完成初始化');
   } else {
-    warn('数据库启动超时，请稍后手动执行：pnpm --dir apps/api prisma:push && pnpm --dir apps/api seed');
+    warn('数据库启动超时，请稍后手动执行：pnpm db:init');
   }
 } else {
   warn('未检测到可用的 Docker（引擎未启动或未安装）。');

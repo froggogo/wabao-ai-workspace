@@ -5,6 +5,7 @@ import * as bcrypt from 'bcryptjs';
 import { createHash, randomUUID } from 'crypto';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AppException } from '../../common/errors';
+import { SubscriptionService } from '../billing/subscription.service';
 import { RegisterDto, LoginDto, ChangePasswordDto } from './dto/auth.dto';
 
 export interface Tokens {
@@ -19,6 +20,7 @@ export class AuthService {
     private readonly prisma: PrismaService,
     private readonly jwt: JwtService,
     private readonly config: ConfigService,
+    private readonly subscriptions: SubscriptionService,
   ) {}
 
   async register(dto: RegisterDto) {
@@ -34,6 +36,8 @@ export class AuthService {
         name: dto.name?.trim() || dto.email.split('@')[0],
       },
     });
+    // 每个用户恒有一条 active 订阅，配额周期由它定义；缺失时业务侧会走兜底补开
+    await this.subscriptions.openFree(user.id);
     await this.seedDefaultAssistants(user.id);
     const tokens = await this.issueTokens(user.id, user.email);
     return { user: this.publicUser(user), ...tokens };

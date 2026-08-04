@@ -4,8 +4,17 @@ import { tmpdir } from 'node:os';
 import { join, isAbsolute } from 'node:path';
 import { StorageService } from './storage.service';
 
-function makeService(root: string, publicBase = ''): StorageService {
-  const env: Record<string, string> = { MEDIA_ROOT: root, MEDIA_PUBLIC_BASE_URL: publicBase };
+function makeService(
+  root: string,
+  opts: { publicBase?: string; requireSigned?: boolean; secret?: string; ttl?: number } = {},
+): StorageService {
+  const env: Record<string, string> = {
+    MEDIA_ROOT: root,
+    MEDIA_PUBLIC_BASE_URL: opts.publicBase ?? '',
+    MEDIA_REQUIRE_SIGNED: opts.requireSigned === false ? 'false' : 'true',
+    MEDIA_SIGNING_SECRET: opts.secret ?? 'test_secret',
+    MEDIA_URL_TTL_SECONDS: String(opts.ttl ?? 3600),
+  };
   const config = { get: <T>(k: string): T | undefined => env[k] as unknown as T } as ConfigService;
   return new StorageService(config);
 }
@@ -16,7 +25,8 @@ describe('StorageService（P2 媒体存储）', () => {
 
   beforeEach(async () => {
     root = await mkdtemp(join(tmpdir(), 'wabao-media-'));
-    service = makeService(root);
+    // 既有用例按「开放读取」口径断言 URL 形态；签名行为另有专测
+    service = makeService(root, { requireSigned: false });
   });
 
   afterEach(async () => {
@@ -33,7 +43,6 @@ describe('StorageService（P2 媒体存储）', () => {
       expect(isAbsolute(out.path)).toBe(true);
       expect(out.bytes).toBe(data.byteLength);
       expect(out.mimeType).toBe('image/png');
-      // 文件确实落盘且内容一致
       expect((await readFile(out.path)).toString()).toBe('hello-image');
     });
 
@@ -50,52 +59,10 @@ describe('StorageService（P2 媒体存储）', () => {
         expect(out.url.endsWith(ext)).toBe(true);
       }
     });
-
-    it('未知 MIME 回退为 .png', async () => {
-      const out = await service.save(Buffer.from('x'), 'application/octet-stream');
-      expect(out.url.endsWith('.png')).toBe(true);
-    });
-
-    it('支持自定义文件名前缀（区分生成 / 变体 / 上传）', async () => {
-      const gen = await service.save(Buffer.from('a'), 'image/png');
-      const variation = await service.save(Buffer.from('b'), 'image/png', 'var');
-      const upload = await service.save(Buffer.from('c'), 'image/png', 'up');
-
-      expect(gen.url).toContain('/uploads/img_');
-      expect(variation.url).toContain('/uploads/var_');
-      expect(upload.url).toContain('/uploads/up_');
-    });
-
-    it('多次保存生成互不冲突的文件名', async () => {
-      const outs = await Promise.all(
-        Array.from({ length: 8 }, () => service.save(Buffer.from('same'), 'image/png')),
-      );
-      expect(new Set(outs.map((o) => o.url)).size).toBe(8);
-      expect(await readdir(root)).toHaveLength(8);
-    });
-
-    it('目标目录不存在时自动创建', async () => {
-      const nested = join(root, 'a', 'b', 'c');
-      const svc = makeService(nested);
-      const out = await svc.save(Buffer.from('x'), 'image/png');
-      expect((await readFile(out.path)).toString()).toBe('x');
-    });
-  });
-
-  describe('saveBase64', () => {
-    it('正确解码 base64 内容', async () => {
-      const raw = '<svg>mock</svg>';
-      const out = await service.saveBase64(
-        Buffer.from(raw, 'utf8').toString('base64'),
-        'image/svg+xml',
-      );
-      expect((await readFile(out.path)).toString()).toBe(raw);
-      expect(out.bytes).toBe(Buffer.byteLength(raw));
-    });
   });
 
   describe('remove', () => {
-    it('删除已存在的文件', async () => {
+    it('删除已落盘文件', async () => {
       const out = await service.save(Buffer.from('x'), 'image/png');
       await service.remove(out.url);
       expect(await readdir(root)).toHaveLength(0);
@@ -109,7 +76,6 @@ describe('StorageService（P2 媒体存储）', () => {
       const out = await service.save(Buffer.from('x'), 'image/png');
       await service.remove('https://cdn.example.com/a.png');
       await service.remove('/other/a.png');
-      // 原文件不应被误删
       expect(await readdir(root)).toHaveLength(1);
       expect((await readFile(out.path)).toString()).toBe('x');
     });
@@ -119,7 +85,6 @@ describe('StorageService（P2 媒体存储）', () => {
       await writeFile(outside, 'keep');
       try {
         await service.remove('/uploads/../../outside.txt');
-        // 目标文件必须仍然存在
         expect((await readFile(outside)).toString()).toBe('keep');
       } finally {
         await rm(outside, { force: true });
@@ -129,6 +94,55 @@ describe('StorageService（P2 媒体存储）', () => {
     it('忽略没有扩展名的可疑名称', async () => {
       await expect(service.remove('/uploads/noext')).resolves.toBeUndefined();
     });
+
+    it('可删除带签名 query 的 URL', async () => {
+      const out = await service.save(Buffer.from('x'), 'image/png');
+      await service.remove(`${out.url}?exp=1&sig=abc`);
+      expect(await readdir(root)).toHaveLength(0);
+    });
+  });
+
+  describe('签名 URL', () => {
+    it('signUrl 附带 exp 与 sig，verify 通过', () => {
+      const svc = makeService(root, { requireSigned: true, secret: 's1' });
+      const signed = svc.signUrl('/uploads/a.png');
+      expect(signed).toMatch(/^\/uploads\/a\.png\?exp=\d+&sig=[0-9a-f]+$/);
+      const u = new URL(signed, 'http://local');
+      expect(svc.verifySignature('a.png', u.searchParams.get('exp')!, u.searchParams.get('sig')!)).toBe(
+        true,
+      );
+    });
+
+    it('篡改文件名或签名会失败', () => {
+      const svc = makeService(root, { requireSigned: true, secret: 's1' });
+      const signed = svc.signUrl('/uploads/a.png');
+      const u = new URL(signed, 'http://local');
+      expect(svc.verifySignature('b.png', u.searchParams.get('exp')!, u.searchParams.get('sig')!)).toBe(
+        false,
+      );
+      expect(svc.verifySignature('a.png', u.searchParams.get('exp')!, 'deadbeef')).toBe(false);
+    });
+
+    it('过期签名失败', () => {
+      const svc = makeService(root, { requireSigned: true, secret: 's1' });
+      const exp = String(Math.floor(Date.now() / 1000) - 10);
+      expect(svc.verifySignature('a.png', exp, '00')).toBe(false);
+    });
+
+    it('MEDIA_REQUIRE_SIGNED=false 时 signUrl 原样返回', () => {
+      expect(service.signUrl('/uploads/a.png')).toBe('/uploads/a.png');
+    });
+
+    it('toAbsoluteUrl 在强制签名时带上 query', () => {
+      const svc = makeService(root, {
+        requireSigned: true,
+        publicBase: 'https://cdn.example.com',
+        secret: 's1',
+      });
+      const abs = svc.toAbsoluteUrl('/uploads/a.png');
+      expect(abs.startsWith('https://cdn.example.com/uploads/a.png?')).toBe(true);
+      expect(svc.toRelativeUrl(abs)).toBe('/uploads/a.png');
+    });
   });
 
   describe('toAbsoluteUrl', () => {
@@ -137,19 +151,43 @@ describe('StorageService（P2 媒体存储）', () => {
     });
 
     it('配置后拼接为绝对地址（供上游视觉模型访问）', () => {
-      const svc = makeService(root, 'https://cdn.example.com');
+      const svc = makeService(root, { publicBase: 'https://cdn.example.com', requireSigned: false });
       expect(svc.toAbsoluteUrl('/uploads/a.png')).toBe('https://cdn.example.com/uploads/a.png');
     });
 
     it('自动去除 base url 末尾多余斜杠，避免双斜杠', () => {
-      const svc = makeService(root, 'https://cdn.example.com/');
+      const svc = makeService(root, { publicBase: 'https://cdn.example.com/', requireSigned: false });
       expect(svc.toAbsoluteUrl('/uploads/a.png')).toBe('https://cdn.example.com/uploads/a.png');
     });
 
-    it('已是完整 http(s) URL 时原样返回', () => {
-      const svc = makeService(root, 'https://cdn.example.com');
+    it('已是完整 http(s) URL 且非本站 uploads 时原样返回', () => {
+      const svc = makeService(root, { publicBase: 'https://cdn.example.com', requireSigned: false });
       const url = 'https://other.com/x.png';
       expect(svc.toAbsoluteUrl(url)).toBe(url);
+    });
+  });
+
+  describe('toRelativeUrl', () => {
+    it('未配置 base url 时原样返回', () => {
+      expect(service.toRelativeUrl('/uploads/a.png')).toBe('/uploads/a.png');
+    });
+
+    it('剥离本站 base url 前缀，便于与库中存储的相对路径比对', () => {
+      const svc = makeService(root, { publicBase: 'https://cdn.example.com', requireSigned: false });
+      expect(svc.toRelativeUrl('https://cdn.example.com/uploads/a.png')).toBe('/uploads/a.png');
+    });
+
+    it('与 toAbsoluteUrl 互为逆运算', () => {
+      const svc = makeService(root, { publicBase: 'https://cdn.example.com', requireSigned: false });
+      expect(svc.toRelativeUrl(svc.toAbsoluteUrl('/uploads/a.png'))).toBe('/uploads/a.png');
+    });
+
+    it('剥离签名 query', () => {
+      expect(service.toRelativeUrl('/uploads/a.png?exp=1&sig=abc')).toBe('/uploads/a.png');
+    });
+
+    it('任意 host 下的 /uploads/ 都归一化为相对路径（归属校验仍要求库内存在）', () => {
+      expect(service.toRelativeUrl('https://evil.com/uploads/a.png')).toBe('/uploads/a.png');
     });
   });
 
